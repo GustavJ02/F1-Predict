@@ -6,7 +6,7 @@ Usage:
 """
 import argparse, io, os, time
 import pandas as pd
-from predict_elimination import predict
+from quali.predict_elimination import predict
 
 
 def prepare(df):
