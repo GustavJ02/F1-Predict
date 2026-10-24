@@ -1,17 +1,27 @@
-"""Qualifying model for the runner: predicts where the Q1/Q2 cutoff will end up.
+"""Qualifying model for the runner: Q1/Q2 predict where the cutoff will end up, Q3 who takes pole.
 
 Use it with:  MODEL=quali.model ./run_session.sh 2026 Austin quali
 """
 import pandas as pd
 from quali.predict_elimination import predict as predict_cutoff
+from quali.predict_pole import predict as predict_pole
 
 
 def predict(state, history, info):
     part = info["session_part"]
-    if pd.isna(part) or int(part) == 3:        # Q3 has no elimination
+    if pd.isna(part):
         return None
-    res = predict_cutoff(history, int(part), as_of=info["now"], verbose=False)
+    part = int(part)
+    if part == 3:       # no elimination: pole probabilities for the three most likely drivers
+        res = predict_pole(history, part, as_of=info["now"], verbose=False)
+        if res is None:
+            return None
+        row = dict(part=part, current=res["current"], n_pending=res["n_pending"])
+        for i, t in enumerate(res["top3"], 1):
+            row[f"pole{i}"], row[f"p{i}"] = t["tla"], t["prob"]
+        return row
+    res = predict_cutoff(history, part, as_of=info["now"], verbose=False)
     if res is None:
         return None
-    return dict(part=int(part), current=res["current"], pred=res["pred"],
+    return dict(part=part, current=res["current"], pred=res["pred"],
                 lo=res["lo"], hi=res["hi"], n_pending=res["n_pending"])

@@ -7,6 +7,7 @@ from f1live.feed import follow
 from f1live.parse import FIELDS, Parser
 from f1live.paths import Session
 from quali.predict_elimination import predict
+from quali.predict_pole import predict as predict_pole
 
 RAW = Session("2026", "Austin", "quali").raw
 AS_OF = "2026-10-24T21:40:28.476Z"
@@ -40,3 +41,13 @@ def test_cutoff_prediction(events):
 
 def test_no_phantom_driver(events):
     assert prepare(events.copy())["driver"].isin(["<NA>", "nan"]).sum() == 0
+
+
+def test_pole_prediction(events):
+    rows = prepare(events.copy())
+    late = predict_pole(rows, 3, "2026-10-24T22:00:30Z", verbose=False)    # six drivers still on a flying lap
+    probs = [t["prob"] for t in late["top3"]]
+    assert len(probs) == 3 and probs == sorted(probs, reverse=True) and sum(probs) <= 1
+    assert late["current_driver"] == "12"
+    done = predict_pole(rows, 3, verbose=False)                               # session over: pole is settled
+    assert done["top3"][0]["tla"] == "ANT" and done["top3"][0]["prob"] == 1.0

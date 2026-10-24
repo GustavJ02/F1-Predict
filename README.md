@@ -16,7 +16,8 @@ f1live/              shared package
   replay.py          re-plays one session's raw.txt into another session in (scaled) real time
   archive.py         downloads a finished session from F1's archive into raw.txt (untested)
 race/model.py        race model template ("current order" baseline) - yours to edit
-quali/               qualifying: predict_elimination.py (cutoff simulation), model.py (runner hook for it)
+quali/               qualifying: state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
+                     predict_pole.py (Q3 pole probabilities), model.py (runner hook for both)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
 data/                gitignored
   <year>/<race>/<session>/
@@ -43,6 +44,7 @@ Use another model with `MODEL=quali.my_model ./run_session.sh ...` (a module wit
 ```bash
 MODEL=quali.model ./run_session.sh 2026 Austin quali   # record + parse + cutoff prediction in predictions.csv
 python -m quali.predict_elimination 2026 Austin quali --part 2 --as-of 2026-10-24T21:33:00Z   # one-off run
+python -m quali.predict_pole 2026 Austin quali --as-of 2026-10-24T22:00:30Z            # pole probabilities (Q3)
 ```
 
 ## Testing without a live session

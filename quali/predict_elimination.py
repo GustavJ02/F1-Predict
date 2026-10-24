@@ -9,8 +9,8 @@ import numpy as np
 import pandas as pd
 from f1live.events import load as load_and_prepare
 from f1live.paths import add_session_args, session_from_args
+from quali.state import session_state
 
-PRIOR_MU, PRIOR_SIGMA = 0.3, 0.3   # fallback until there are enough first->second pairs
 
 def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, seed=0):
     rng = np.random.default_rng(seed)
@@ -30,59 +30,11 @@ def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, s
 
 
 def predict(all_rows, part, as_of=None, verbose=True):
-    raw = all_rows
-    now = raw['ts'].max()
-    if as_of is not None:
-        now = pd.Timestamp(as_of)
-        raw = raw[raw['ts'] <= now]
-    raw = raw[raw['session_part'] == part].sort_values('ts')
-    if raw.empty:
+    q = session_state(all_rows, part, as_of)
+    if q is None:
         return None
-
-    laps = raw[raw['event'] == 'lap']
-
-    # Real attempts: push laps AND slower 'other' laps, filtered on pace
-    attempt_laps = laps[laps['lap_kind'].isin(['push', 'other'])].copy()
-    attempt_laps = attempt_laps[attempt_laps['lap_time_s'] < 1.025 * attempt_laps['lap_time_s'].min()]
-
-    # ---- improvement first -> second attempt ----
-    attempt_laps['attempt'] = attempt_laps.groupby('driver').cumcount() + 1
-    attempts = (attempt_laps[attempt_laps['attempt'] <= 2]
-                .pivot(index='driver', columns='attempt', values='lap_time_s')
-                .reindex(columns=[1, 2])
-                .rename(columns={1: 'first', 2: 'second'})
-                .dropna())
-    attempts['improvement_s'] = attempts['first'] - attempts['second']
-    if len(attempts) >= 3:
-        imp = attempts['improvement_s']
-        mu = imp.median()
-        sigma = max(1.4826 * (imp - mu).abs().median(), 0.05)
-    else:
-        mu, sigma = PRIOR_MU, PRIOR_SIGMA
-
-    # ---- current state per driver ----
-    deleted = raw[raw['event'] == 'lap_deleted'][['driver', 'lap_time_s']]
-    valid = attempt_laps.merge(deleted.assign(deleted=True), on=['driver', 'lap_time_s'], how='left')
-    valid = valid[valid['deleted'].isna()]
-
-    state = pd.DataFrame(index=sorted(raw['driver'].dropna().unique(), key=int))   # fixed order: results don't depend on row order
-    state['best'] = valid.groupby('driver')['lap_time_s'].min()
-    feed_best = raw.groupby('driver')['best_in_part_s'].last()
-    state['best'] = state['best'].fillna(feed_best)
-    state['n_attempts'] = attempt_laps.groupby('driver').size()
-    state['n_attempts'] = state['n_attempts'].fillna(0).astype(int)
-
-    # Clock at "now", extrapolated from the latest row
-    latest = raw.iloc[-1]
-    n_advance = 1 if pd.isna(latest['n_advance']) else int(latest['n_advance'])
-    clock_left = max(latest['clock_left_s'] - (now - latest['ts']).total_seconds(), 0)
-
-    # A driver whose latest completed lap was an out-lap is on a flying lap right now.
-    # That lap counts even if it finishes after the chequered flag.
-    last_kind = laps.groupby('driver')['lap_kind'].last()
-    state['on_flying_lap'] = state.index.map(last_kind).isin(['out'])
-    state['pending'] = state['on_flying_lap'] | ((clock_left > 0) & (state['n_attempts'] < 2))
-    state['p_run'] = np.where(state['on_flying_lap'], 0.95, 0.9)
+    now, state, attempts, mu, sigma = q.now, q.state, q.attempts, q.mu, q.sigma
+    n_advance, clock_left = q.n_advance, q.clock_left
 
     best_times = state['best'].dropna().sort_values()
     current = best_times.iloc[n_advance - 1] if len(best_times) >= n_advance else np.nan
