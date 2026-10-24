@@ -181,6 +181,10 @@ class Parser:
                 self.emit(self.row(ts, "retired", drv))
 
             if not val(delta, "LastLapTime", "Value"):
+                # Lap 1 is reported as NumberOfLaps=1 with no lap time; without this the pre-race pit exit
+                # keeps the out flag set and lap 2 is mislabelled 'out'.
+                if self.is_race() and delta.get("NumberOfLaps") == 1 and not ln.get("InPit"):
+                    f["out"] = False
                 continue
             llt = ln["LastLapTime"]
             pb = bool(llt.get("PersonalFastest"))
