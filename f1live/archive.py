@@ -1,6 +1,7 @@
 """Download a finished session from F1's live-timing archive and write it in the same raw format
 the FastF1 live client records, so it can be parsed and replayed like a live recording.
-No F1TV login is needed for finished sessions.
+The archive requires an F1TV login now (401 otherwise): requests go through fastf1's auth adapter, which
+sends the token from `python -m fastf1 auth f1tv` to livetiming.formula1.com only.
 
 Usage (from the repo root); writes data/<year>/<race>/<session>/raw.txt:
     python -m f1live.archive --list 2026                          # list meetings and sessions
@@ -8,31 +9,33 @@ Usage (from the repo root); writes data/<year>/<race>/<session>/raw.txt:
     python -m f1live.archive 2026 Singapore quali --archive-name Qualifying
     python -m f1live.archive 2026 Austin quali --path "2026/2026-10-25_United_States_Grand_Prix/2026-10-24_Qualifying/"
 
-NOTE: written against the archive layout FastF1 uses (Index.json + <Topic>.jsonStream);
-not tested against the live server yet. Validate it by fetching a session you also recorded live.
+Uses the archive layout FastF1 uses (Index.json + <Topic>.jsonStream).
 """
 import argparse, json, sys
 from datetime import timedelta
 import requests
+from fastf1.internals.f1account import LIVETIMING_URL, LivetimingAuthAdapter, token_manager
 from f1live.feed import iso
 from f1live.paths import add_session_args, session_from_args
 
 BASE = "https://livetiming.formula1.com/static/"
+HTTP = requests.Session()
+HTTP.mount(LIVETIMING_URL, LivetimingAuthAdapter(token_manager))
 TOPICS = ["SessionInfo", "DriverList", "TimingData", "TimingAppData", "TimingStats", "LapCount",
           "TrackStatus", "RaceControlMessages", "WeatherData", "ExtrapolatedClock", "SessionData",
           "SessionStatus", "Heartbeat", "TopThree", "PitLaneTimeCollection"]
 
 
 def get_json(url):
-    r = requests.get(url, timeout=30)
+    r = HTTP.get(url, timeout=30)
     r.raise_for_status()
     return json.loads(r.content.decode("utf-8-sig"))
 
 
 def stream(path, topic):
     """Yield (offset_seconds, payload) from a .jsonStream file. Lines look like 00:01:23.456{...}."""
-    r = requests.get(f"{BASE}{path}{topic}.jsonStream", timeout=60)
-    if r.status_code == 404:
+    r = HTTP.get(f"{BASE}{path}{topic}.jsonStream", timeout=60)
+    if r.status_code in (403, 404):      # the archive answers 403 for topics a session doesn't have
         return
     r.raise_for_status()
     for line in r.content.decode("utf-8-sig").splitlines():
@@ -40,6 +43,13 @@ def stream(path, topic):
             continue
         h, m, s = line[:12].split(":")
         yield int(h) * 3600 + int(m) * 60 + float(s), json.loads(line[12:])
+
+
+def anchor(events, topic):
+    """Median stream start time implied by the payloads' own `Utc` field, or None."""
+    t0s = sorted(iso(p["Utc"]) - timedelta(seconds=off)
+                 for off, t, p in events if t == topic and isinstance(p, dict) and "Utc" in p)
+    return t0s[len(t0s) // 2] if t0s else None
 
 
 def find_path(year, meeting, session):
@@ -89,19 +99,25 @@ def main():
             n += 1
         print(f"  {topic}: {n} messages")
 
-    # Offsets are relative to the stream start; Heartbeat carries absolute UTC to anchor them.
-    hb = next(((off, p) for off, t, p in events if t == "Heartbeat" and isinstance(p, dict) and "Utc" in p), None)
-    if not hb:
-        sys.exit("no Heartbeat in archive; cannot anchor timestamps")
-    t0 = iso(hb[1]["Utc"]) - timedelta(seconds=hb[0])
+    # Offsets are relative to the stream start; anchor them with absolute UTC stamps in the payloads.
+    # ExtrapolatedClock anchors agree with the live recording to the ms (constant across the session);
+    # a single Heartbeat is ~2 s off and later ones drift, so Heartbeat is only the fallback.
+    t0 = anchor(events, "ExtrapolatedClock") or anchor(events, "Heartbeat")
+    if t0 is None:
+        sys.exit("no ExtrapolatedClock/Heartbeat in archive; cannot anchor timestamps")
 
     events.sort(key=lambda e: e[0])
+    first_seen = set()
     with open(out, "w") as f:
         for off, topic, payload in events:
             ts = (t0 + timedelta(seconds=off)).isoformat(timespec="milliseconds") + "Z"
+            # The first message of a topic is its full state: write it as a keyframe (ts '') like the live
+            # recorder does, so the parser only builds state from it. RaceControlMessages starts with a real message.
+            if topic not in first_seen and topic != "RaceControlMessages":
+                ts = ""
+            first_seen.add(topic)
             f.write(str([topic, payload, ts]) + "\n")
     print(f"wrote {len(events)} messages to {out}")
-
 
 if __name__ == "__main__":
     main()
