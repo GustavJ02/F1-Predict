@@ -13,6 +13,9 @@ RAW=$DIR/raw.txt
 SNAPSHOT=${SNAPSHOT:-5}
 TICK=${TICK:-5}
 MODEL=${MODEL:-race.model}
+if [[ -n "${REPLAY:-}" && ! -f "data/$REPLAY/raw.txt" ]]; then
+  echo "REPLAY source data/$REPLAY/raw.txt does not exist" >&2; exit 1
+fi
 mkdir -p "$DIR"    # the recorder won't create it
 
 restart() {   # restart <name> <cmd...> : run forever, restarting after crashes

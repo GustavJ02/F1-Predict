@@ -89,7 +89,7 @@ def main():
                 last_row_wall = wall
             # "now" = latest event time, extrapolated by wall time since it arrived.
             # Works live and for real-speed replays (not for sped-up replays).
-            now = history["ts"].max() + pd.Timedelta(seconds=wall - last_row_wall)
+            now = history["ts"].max() + pd.Timedelta(wall - last_row_wall, unit="s")
             latest = history.iloc[-1]
             info = dict(now=now, session_type=latest.get("session_type"),
                         session_part=latest.get("session_part"), race_lap=latest.get("race_lap"),

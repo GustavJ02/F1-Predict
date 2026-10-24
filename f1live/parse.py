@@ -46,6 +46,7 @@ class Parser:
         self.last_part = None
         self.last_track = None
         self.last_snapshot = None
+        self.snapshot_every = 0    # seconds between per-driver snapshots (0 = off)
 
     # ---------- state helpers ----------
     def session_type(self):
