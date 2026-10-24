@@ -1,6 +1,7 @@
 """Predict the Q1/Q2 cutoff time and P1 time from events.csv.
 
-Usage (from the repo root):  python -m quali.predict_elimination 2026 Austin quali
+Usage (from the repo root):
+    python -m quali.predict_elimination 2026 Austin quali [--part 2] [--as-of 2026-10-24T21:33:00Z]
 """
 import argparse
 
@@ -9,10 +10,7 @@ import pandas as pd
 from f1live.events import load as load_and_prepare
 from f1live.paths import add_session_args, session_from_args
 
-PART = 2                           # which segment to predict
 PRIOR_MU, PRIOR_SIGMA = 0.3, 0.3   # fallback until there are enough first->second pairs
-#AS_OF = '2026-10-24T21:40:28.476Z' # pretend "now" is this moment; None = use everything
-AS_OF = None
 
 def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, seed=0):
     rng = np.random.default_rng(seed)
@@ -106,8 +104,9 @@ def predict(all_rows, part, as_of=None, verbose=True):
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
     add_session_args(ap)
-    ap.add_argument('--part', type=int, default=PART, help='session part to predict')
-    ap.add_argument('--as-of', help='pretend "now" is this moment (ISO8601); default = use everything', default=None)
+    ap.add_argument('--part', type=int, help='session part to predict (default: the latest part in the data)')
+    ap.add_argument('--as-of', help='pretend "now" is this moment (ISO8601); default = use everything')
     args = ap.parse_args()
-    rows = load_and_prepare(session_from_args(ap.parse_args()).events)
-    predict(rows, args.part, args.as_of)
+    rows = load_and_prepare(session_from_args(args).events)
+    part = args.part or int(rows['session_part'].dropna().iloc[-1])
+    predict(rows, part, args.as_of)
