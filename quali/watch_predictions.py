@@ -6,15 +6,10 @@ Usage (from the repo root):
 """
 import argparse, time
 import pandas as pd
+from f1live.events import prepare
 from f1live.paths import add_session_args, session_from_args
 from f1live.tail import CsvTail
 from quali.predict_elimination import predict
-
-
-def prepare(df):
-    df['ts'] = pd.to_datetime(df['ts'], format='ISO8601')
-    df['driver'] = df['driver'].astype('Int64').astype(str)
-    return df
 
 
 def watch(path, interval):

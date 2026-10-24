@@ -6,20 +6,13 @@ import argparse
 
 import numpy as np
 import pandas as pd
+from f1live.events import load as load_and_prepare
 from f1live.paths import add_session_args, session_from_args
 
 PART = 2                           # which segment to predict
 PRIOR_MU, PRIOR_SIGMA = 0.3, 0.3   # fallback until there are enough first->second pairs
 #AS_OF = '2026-10-24T21:40:28.476Z' # pretend "now" is this moment; None = use everything
 AS_OF = None
-
-def load_and_prepare(path):
-    rows = pd.read_csv(path)
-    rows['ts'] = pd.to_datetime(rows['ts'], format='ISO8601')
-    rows['driver'] = rows['driver'].astype('Int64').astype(str)
-    return rows
-
-
 
 def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, seed=0):
     rng = np.random.default_rng(seed)
@@ -74,7 +67,7 @@ def predict(all_rows, part, as_of=None, verbose=True):
     valid = attempt_laps.merge(deleted.assign(deleted=True), on=['driver', 'lap_time_s'], how='left')
     valid = valid[valid['deleted'].isna()]
 
-    state = pd.DataFrame(index=raw['driver'].dropna().unique())
+    state = pd.DataFrame(index=sorted(raw['driver'].dropna().unique(), key=int))   # fixed order: results don't depend on row order
     state['best'] = valid.groupby('driver')['lap_time_s'].min()
     feed_best = raw.groupby('driver')['best_in_part_s'].last()
     state['best'] = state['best'].fillna(feed_best)

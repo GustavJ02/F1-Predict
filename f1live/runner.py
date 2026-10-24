@@ -21,17 +21,12 @@ when you save it, and an exception in the model is printed without stopping the 
 import argparse, importlib, importlib.util, io, os, sys, time, traceback
 from datetime import datetime, timezone
 import pandas as pd
+from f1live.events import prepare
 from f1live.paths import ROOT, add_session_args, session_from_args
 from f1live.tail import CsvTail
 
 # Columns that describe one event rather than the driver's ongoing state
 EVENT_ONLY = ["event", "message", "pit_lane_s"]
-
-
-def prepare(df):
-    df["ts"] = pd.to_datetime(df["ts"], format="ISO8601")
-    df["driver"] = df["driver"].map(lambda x: str(int(x)) if pd.notna(x) else None)
-    return df
 
 
 def build_state(history):
