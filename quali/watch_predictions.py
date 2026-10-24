@@ -1,11 +1,13 @@
-"""Watch laps.csv and re-run the cutoff prediction whenever new rows arrive.
+"""Watch a session's events.csv and re-run the cutoff prediction whenever new rows arrive.
 
-Usage:
-    python watch_predictions.py              # watches ./laps.csv
-    python watch_predictions.py --csv q.csv --interval 0.5
+Usage (from the repo root):
+    python -m quali.watch_predictions 2026 Austin quali
+    python -m quali.watch_predictions 2026 Austin quali --interval 0.5
 """
-import argparse, io, os, time
+import argparse, time
 import pandas as pd
+from f1live.paths import add_session_args, session_from_args
+from f1live.tail import CsvTail
 from quali.predict_elimination import predict
 
 
@@ -16,43 +18,27 @@ def prepare(df):
 
 
 def watch(path, interval):
-    rows, header, offset, buf = None, None, 0, ''
+    tail, rows = CsvTail(path, prepare), None
     print(f'watching {path} ...')
     while True:
-        try:
-            size = os.path.getsize(path)
-        except FileNotFoundError:
-            time.sleep(interval); continue
-
-        if size < offset:                       # file was rewritten (parser restarted)
+        new = tail.read()
+        if isinstance(new, str):                # file was rewritten (parser restarted)
             print('file truncated, reloading from start')
-            rows, header, offset, buf = None, None, 0, ''
-
-        if size > offset:
-            with open(path) as f:
-                f.seek(offset)
-                buf += f.read()
-                offset = f.tell()
-            # only use complete lines; keep any half-written line for next time
-            complete, _, buf = buf.rpartition('\n')
-            lines = [l for l in complete.splitlines() if l.strip()]
-            if header is None and lines:
-                header, lines = lines[0], lines[1:]
-            if lines:
-                new = prepare(pd.read_csv(io.StringIO('\n'.join([header] + lines))))
-                rows = new if rows is None else pd.concat([rows, new], ignore_index=True)
-                part = int(rows['session_part'].dropna().iloc[-1])
-                print(f'\n--- {len(new)} new row(s), Q{part} ---')
-                predict(rows, part)
+            rows = None
+        elif new is not None:
+            rows = new if rows is None else pd.concat([rows, new], ignore_index=True)
+            part = int(rows['session_part'].dropna().iloc[-1])
+            print(f'\n--- {len(new)} new row(s), Q{part} ---')
+            predict(rows, part)
         time.sleep(interval)
 
 
 if __name__ == '__main__':
     ap = argparse.ArgumentParser()
-    ap.add_argument('--csv', default='laps.csv')
+    add_session_args(ap)
     ap.add_argument('--interval', type=float, default=0.5, help='seconds between checks')
     args = ap.parse_args()
     try:
-        watch(args.csv, args.interval)
+        watch(session_from_args(args).events, args.interval)
     except KeyboardInterrupt:
         pass
