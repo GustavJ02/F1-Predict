@@ -9,27 +9,39 @@ import numpy as np
 import pandas as pd
 from f1live.events import load as load_and_prepare
 from f1live.paths import add_session_args, session_from_args
+from live.quali.prior import expected_times
 from live.quali.state import session_state
 
 
-def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, seed=0):
+def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, seed=0, center=None, extra=None):
+    """center / extra (from live.quali.prior): expected lap of a run still to come and extra spread for drivers
+    without a time; NaN in center keeps the old rule (best - mu, the field median for drivers without a time)."""
     rng = np.random.default_rng(seed)
     n = len(best)
-    if n < n_advance or np.isnan(best).all():
-        return np.nan, np.array([np.nan, np.nan])     # not enough drivers/times yet
+    no_times = np.isnan(best).all()
+    if n < n_advance or (no_times and center is None):
+        return np.nan, np.array([np.nan, np.nan])     # not enough drivers/times yet (and no prior to go on)
     # Drivers without a valid time yet: base their attempt on the field's median best
-    base = np.where(np.isnan(best), np.nanmedian(best), best)
+    base = np.where(np.isnan(best), np.nan if no_times else np.nanmedian(best), best)
     sims = np.tile(best, (n_sims, 1))
 
     runs = (rng.random((n_sims, n)) < p_run) & pending
-    second = base - (mu + sigma * rng.standard_normal((n_sims, n)))
+    old = base - mu
+    if center is None:
+        center, extra = old, np.zeros(n)
+    else:
+        extra = np.where(np.isnan(center), 0.0, extra)
+        center = np.where(np.isnan(center), old, center)
+    second = center - np.hypot(sigma, extra) * rng.standard_normal((n_sims, n))   # (minus: same draws as before)
     sims = np.where(runs, np.fmin(sims, second), sims)
 
     cutoff = np.sort(sims, axis=1)[:, n_advance - 1]   # NaNs (no time) sort last
-    return np.median(cutoff), np.percentile(cutoff, [5, 95])
+    if np.isnan(cutoff).all():
+        return np.nan, np.array([np.nan, np.nan])
+    return np.nanmedian(cutoff), np.nanpercentile(cutoff, [5, 95])    # a run where too few drivers set a time is skipped
 
 
-def predict(all_rows, part, as_of=None, verbose=True):
+def predict(all_rows, part, as_of=None, verbose=True, prior=None):
     q = session_state(all_rows, part, as_of)
     if q is None:
         return None
@@ -39,9 +51,12 @@ def predict(all_rows, part, as_of=None, verbose=True):
     best_times = state['best'].dropna().sort_values()
     current = best_times.iloc[n_advance - 1] if len(best_times) >= n_advance else np.nan
 
+    center = extra = None
+    if prior is not None:
+        center, extra = expected_times(prior, state, mu, clock_left)
     median, (lo, hi) = simulate_cutoff(
         state['best'].to_numpy(dtype=float), state['pending'].to_numpy(),
-        state['p_run'].to_numpy(), mu, sigma, n_advance)
+        state['p_run'].to_numpy(), mu, sigma, n_advance, center=center, extra=extra)
 
     if verbose:
         print(f'as of {now}  clock {clock_left:.0f}s')

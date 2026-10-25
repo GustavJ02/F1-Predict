@@ -22,12 +22,14 @@ f1live/              shared plumbing (used by everything below)
 live/                predictions run DURING a session
   quali/             state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both),
-                     watch.py (live view), backtest_pole.py (score pole predictions on past sessions)
+                     watch.py (live view), backtest_pole.py (score pole predictions on past sessions),
+                     prior.py (pace prior for Q1/Q2 from earlier sessions + parts), backtest_cutoff.py (score the cutoff)
   race/              model.py (race model template, "current order" baseline - yours to edit),
                      watch.py (live view of the latest prediction, any columns)
 pre/                 predictions made BEFORE a session, from past sessions
   history.py         pace tables for any session in data/ (best valid lap per driver, gap to the fastest in %)
-  quali/             features.py (form, practice, sprint-quali inputs), predict_grid.py (pole probabilities and
+  quali/             parts.py (pace of each of Q1/Q2/Q3 from earlier sessions and parts), features.py (form, practice,
+                     sprint-quali inputs), predict_grid.py (pole probabilities and
                      expected grid), backtest.py (score it on every past quali, with ablations)
   race/              (not built yet)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
@@ -118,3 +120,20 @@ python -m f1live.archive 2026 Singapore quali --telemetry            # one sessi
 python -m f1live.fetch_season 2026 --telemetry                        # every session that has no telemetry.csv yet
 python -m f1live.telemetry 2026 Singapore quali --replay             # (re)build telemetry.csv
 ```
+
+## Pace prior for the cutoff (Q1/Q2)
+
+`live.quali.model` gives each driver who still has a run to come an expected lap from what is known before the part:
+season form, this weekend's practice and sprint pace, and the parts before it (`pre/quali/parts.py`, one ridge per part,
+trained only on earlier weekends; `live/quali/prior.py` turns the gap into seconds). `USE_PRIOR = False` in the model
+switches it off. Q3 (pole) doesn't use it: it did not improve the pole probabilities.
+
+```bash
+python -m pre.quali.parts                                # how well each part's pace is predicted, vs simple baselines
+python -m live.quali.backtest_cutoff                     # baseline cutoff prediction on every quali in data/
+python -m live.quali.backtest_cutoff --prior --csv x.csv # with the prior
+```
+Backtest, 42 qualis, one prediction every 30 s, same snapshots: mean absolute error of the predicted cutoff 0.629 s
+-> 0.348 s, 90% interval coverage 51% -> 66%; most of the gain is early in a part (>7 min left: 1.36 s -> 0.67 s). The
+prior also gives a prediction before anyone has set a time (Q2: 0.31 s error; Q1: 1.3 s, biased fast by ~0.9 s). The
+pull of the prior (`live/quali/prior.py`) was picked using both years, so these numbers are fitted, not held out.

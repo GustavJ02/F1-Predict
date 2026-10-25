@@ -12,7 +12,8 @@ Your model is a module with one function:
     state    DataFrame, one row per driver (index = car number), latest known value of every column
     history  DataFrame, every event row so far (the full events.csv)
     info     dict: now, session_type, session_part, race_lap, total_laps, track_status,
-             clock_left_s, new_rows (DataFrame of rows that triggered this call; empty on a tick),
+             clock_left_s, session (the Session: year, race, name), new_rows (DataFrame of rows that triggered this
+             call; empty on a tick),
              telemetry (last --tel-window s of telemetry.csv: ts, driver, speed, rpm, gear, throttle, brake,
              x, y, z, pos_status; empty if f1live.telemetry isn't running)
 
@@ -121,7 +122,7 @@ def main():
             # Works live and for real-speed replays (not for sped-up replays).
             now = history["ts"].max() + pd.Timedelta(wall - last_row_wall, unit="s")
             latest = history.iloc[-1]
-            info = dict(now=now, session_type=latest.get("session_type"),
+            info = dict(now=now, session=sess, session_type=latest.get("session_type"),
                         session_part=latest.get("session_part"), race_lap=latest.get("race_lap"),
                         total_laps=latest.get("total_laps"), track_status=latest.get("track_status"),
                         clock_left_s=latest.get("clock_left_s"),
