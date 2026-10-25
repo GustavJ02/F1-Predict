@@ -35,7 +35,11 @@ def available(data_dir=DATA):
 
 def valid_laps(path):
     """Flying laps of one session (no in/out laps, deleted laps removed): driver, tla, team, lap_time_s, ..."""
-    ev = load(path)
+    return valid_laps_from(load(path))
+
+
+def valid_laps_from(ev):
+    """valid_laps for events already in memory (e.g. a session that is still being recorded)."""
     laps = ev[(ev["event"] == "lap") & ev["lap_kind"].isin(FLYING) & ev["lap_time_s"].notna()]
     deleted = ev[ev["event"] == "lap_deleted"][["driver", "lap_time_s"]].assign(deleted=True)
     laps = laps.merge(deleted, on=["driver", "lap_time_s"], how="left")

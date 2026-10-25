@@ -46,13 +46,15 @@ def ewma(series_list, halflife=FORM_HALFLIFE):
     return num / den.where(den > 0)
 
 
-def weekend_features(tables, year, race, with_target=True):
+def weekend_features(tables, year, race, with_target=True, drivers=None):
+    """`drivers` (DataFrame indexed by tla with a `team` column) fixes the rows and keeps the quali's own events.csv
+    unread: for a quali that is still being recorded, whose pace table would be incomplete (and cached)."""
     race = race_key(race)
     av = tables.av
     wk = av[(av["year"] == year) & (av["race"] == race)]
     q = wk[wk["session"] == "quali"]
     cutoff = q["start"].iloc[0] if len(q) else wk["start"].max()
-    quali_t = tables.get(q["path"].iloc[0]) if len(q) else None
+    quali_t = tables.get(q["path"].iloc[0]) if len(q) and drivers is None else None
 
     # form: this year's earlier qualifying sessions
     prior = av[(av["year"] == year) & (av["session"] == "quali") & (av["start"] < cutoff)].sort_values("start")
@@ -73,7 +75,9 @@ def weekend_features(tables, year, race, with_target=True):
     sprint = tables.session(year, race, "sprint")
 
     # drivers: those in the quali, else everyone seen in this weekend's sessions
-    if quali_t is not None and not quali_t.empty:
+    if drivers is not None:
+        base = drivers[["team"]]
+    elif quali_t is not None and not quali_t.empty:
         base = quali_t.set_index("tla")[["team"]]
     else:
         seen = [tables.session(year, race, s) for s in ("fp1", "fp2", "fp3", "sq", "sprint")]

@@ -42,25 +42,26 @@ def _present(df, columns):
     return [c for c in columns if df[c].notna().any()]
 
 
-def training_set(tables, target, columns):
-    """Earlier weekends (same year or before) with the target's columns, as filled frames."""
+def training_set(tables, target, columns, featurize=weekend_features):
+    """Earlier weekends (same year or before) with the target's columns, as filled frames.
+    `featurize(tables, year, race)` builds one weekend's frame (default: the whole-quali features)."""
     av = tables.av
     quali = av[(av["session"] == "quali") & (av["start"] < target["start"].iloc[0])]
     frames = []
     for r in quali.itertuples():
-        df = weekend_features(tables, r.year, r.race)
-        if "y" in df and len(_present(df, columns)) == len(columns):
+        df = featurize(tables, r.year, r.race)
+        if "y" in df and len(df) and len(_present(df, columns)) == len(columns):
             frames.append(fill(df, columns))
     return frames
 
 
-def fit_model(tables, target, columns=None):
-    columns = _present(target, FEATURES if columns is None else columns)
+def fit_model(tables, target, columns=None, featurize=weekend_features, features=FEATURES, drop_order=DROP_ORDER):
+    columns = _present(target, features if columns is None else columns)
     while True:
-        frames = training_set(tables, target, columns)
+        frames = training_set(tables, target, columns, featurize)
         if len(frames) >= MIN_TRAIN or not columns:
             break
-        drop = next((c for c in DROP_ORDER if c in columns), None)
+        drop = next((c for c in drop_order if c in columns), None)
         if drop is None:
             break
         columns = [c for c in columns if c != drop]
