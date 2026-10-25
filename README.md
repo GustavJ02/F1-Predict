@@ -17,6 +17,7 @@ f1live/              shared plumbing (used by everything below)
   runner.py          tails events.csv, builds per-driver state, calls a model, writes predictions.csv
   replay.py          re-plays one session's raw.txt into another session in (scaled) real time
   watch.py           terminal viewer for predictions.csv (used by the live.*.watch scripts)
+  sync.py            rsync data/ with the central store (rpi:/srv/F1-data): status / pull / push
   archive.py         downloads a finished session from F1's archive into raw.txt (--telemetry: raw_telemetry.txt instead)
   fetch_season.py    downloads (and parses) a whole season, or selected sessions, into data/<year>/<race>/<session>/
 live/                predictions run DURING a session
@@ -44,6 +45,27 @@ data/                gitignored
 
 Session folders are named however you like (`quali`, `race`, `sprint`, `replay`, ...); all
 commands take `year race session` and are run from the repo root.
+
+## Central data store
+
+The master copy of `data/` lives on the Pi (`rpi:/srv/F1-data`, same layout); `data/` here is a working copy that
+can be small or empty. Set `F1_REMOTE` for another store and `F1_DATA` for another local directory.
+
+```bash
+python -m f1live.sync status                       # what differs, per file type (transfers nothing)
+python -m f1live.sync pull                         # fetch missing events.csv files (~32 MB for 2025-26): enough for pre.* and backtests
+python -m f1live.sync pull 2026 Austin quali --what raw telemetry     # more files of one session, e.g. to replay it
+python -m f1live.sync pull --what all 2025         # everything of a year (raw, telemetry, ...)
+python -m f1live.sync push                         # send new/grown files to the store (also after fetch_season)
+```
+
+- `pull` only fetches files you don't have, so it can never overwrite a recording that hasn't been pushed yet.
+- `push` appends to files that grew and never replaces a longer file on the store with a shorter local one.
+  Nothing is ever deleted on either side. `--dry-run` shows what would move.
+- `run_session.sh` pushes its session folder every 30 s while recording and once on exit, so a live session is
+  backed up on the Pi as it happens. If the Pi is unreachable it keeps going and retries (`SYNC=0` turns it off;
+  replays are never pushed). Everything is written locally first: a network problem can't cost live data.
+- File types for `--what`: `events` (default for pull), `telemetry` (~6 GB), `raw`, `raw_telemetry`, `predictions`, `all`.
 
 ## Race day
 

@@ -1,10 +1,13 @@
-"""Where a session's files live: data/<year>/<race>/<session>/{raw.txt,events.csv,predictions.csv}."""
-import unicodedata
+"""Where a session's files live: data/<year>/<race>/<session>/{raw.txt,events.csv,predictions.csv}.
+
+F1_DATA overrides the local data directory, F1_REMOTE the central store used by f1live.sync."""
+import os, unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA = ROOT / "data"
+DATA = Path(os.environ.get("F1_DATA", ROOT / "data"))
+REMOTE = os.environ.get("F1_REMOTE", "rpi:/srv/F1-data")      # central store, see f1live.sync
 
 
 def folder_name(name):
