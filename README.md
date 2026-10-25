@@ -25,8 +25,9 @@ live/                predictions run DURING a session
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both),
                      watch.py (live view), backtest_pole.py (score pole predictions on past sessions),
                      prior.py (pace prior for Q1/Q2 from earlier sessions + parts), backtest_cutoff.py (score the cutoff)
-  race/              model.py (race model template, "current order" baseline - yours to edit),
-                     watch.py (live view of the latest prediction, any columns)
+  race/              pace.py (race pace per driver), battles.py (who will be within 1 s of whom, in how many laps),
+                     model.py (runner hook: writes the battles to predictions.csv), watch.py (full-screen dashboard),
+                     backtest_battles.py (score the battle predictions on every recorded race)
 pre/                 predictions made BEFORE a session, from past sessions
   history.py         pace tables for any session in data/ (best valid lap per driver, gap to the fastest in %)
   quali/             parts.py (pace of each of Q1/Q2/Q3 from earlier sessions and parts), features.py (form, practice,
@@ -45,6 +46,33 @@ data/                gitignored
 
 Session folders are named however you like (`quali`, `race`, `sprint`, `replay`, ...); all
 commands take `year race session` and are run from the repo root.
+
+## Race dashboard
+
+```bash
+./run_session.sh 2026 Singapore race            # record + parse + battle predictions
+python -m live.race.watch 2026 Singapore race   # in a second, full-screen terminal (Ctrl-C quits)
+```
+
+Left: lap counter, track status and the live standings with car number, driver code, gap to the leader, interval to the
+car ahead (yellow = within 1 s), tyre and age, pit stops, last and best lap. Retired and stopped cars show OUT.
+Right: **Coming up**, predicted battles ("Battle for 4th in ~3 laps": which cars, the gap to the car ahead, and when each
+pair gets within range), and **In range now**, battles already happening.
+
+How the battle prediction works (`live/race/battles.py`): a driver's pace is the median of the last 4 clean racing laps on
+the current stint (no in/out laps, green flag only, not lap 1-2); with fewer than 3 clean laps the car has no pace and the
+model says "collecting pace data". For each pair of neighbours the gap closes by the pace difference per lap, so
+`laps = (gap - 1 s) / (pace_ahead - pace_behind)`. Cars in the pit lane, out of the race, or lapped relative to the car
+ahead are skipped, predictions pause under safety car / VSC / red flag, and nothing is predicted past the flag.
+
+How good is it? `python -m live.race.backtest_battles` replays 25 races (2025 + Singapore 2026): for pairs more than 2 s
+apart, when it predicts contact within 8 laps it is right 87% of the time (about 61% of such pairs make contact anyway
+within 8 laps), with a typical timing error of about 2 laps. It finds only about 30% of the battles that happen: contact
+caused by tyre wear, strategy or traffic isn't visible from lap times. A lap-time trend and longer windows didn't help.
+
+The standings come from the most recent row of each driver in `events.csv`; `run_session.sh` writes a snapshot of all
+drivers every 5 s (`SNAPSHOT`), which keeps them consistent. A finished session parsed without `--snapshot`
+can show duplicate positions.
 
 ## Central data store
 
@@ -74,7 +102,7 @@ python -m fastf1 auth f1tv --status          # check the F1TV login before the s
 ./run_session.sh 2026 Austin race            # Ctrl-C stops everything
 ```
 
-Edit `live/race/model.py` while it runs; the runner reloads it on save and survives exceptions.
+`live/race/model.py` (battle predictions) is the default model; edit it while it runs, the runner reloads it on save and survives exceptions.
 Use another model with `MODEL=live.quali.my_model ./run_session.sh ...` (a module with `predict(state, history, info)`).
 
 ## Qualifying
@@ -92,7 +120,7 @@ In a second terminal while `run_session.sh` runs (works the same for a replay):
 
 ```bash
 python -m live.quali.watch 2026 Austin quali     # cutoff in Q1/Q2, pole probabilities in Q3
-python -m live.race.watch 2026 Singapore race    # latest batch of rows from the race model
+python -m live.race.watch 2026 Singapore race    # full-screen race dashboard (see below)
 python -m live.quali.watch 2026 Austin replay --once   # print once and exit
 ```
 

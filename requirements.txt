@@ -2,3 +2,4 @@ fastf1==3.9.0
 pandas==2.3.3
 numpy==2.5.4
 requests==2.34.2
+rich==15.0.0
