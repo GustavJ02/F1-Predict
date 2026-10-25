@@ -4,6 +4,18 @@
 record (FastF1)  ->  raw.txt  ->  f1live.parse  ->  events.csv  ->  f1live.runner  ->  <session>/model.py  ->  predictions.csv
 ```
 
+## What it looks like
+
+<p align="center">
+  <img src="docs/race-view-live.png" alt="The race dashboard during the 2026 US Grand Prix" width="900">
+</p>
+
+The race dashboard (`python -m live.race.watch`) during the 2026 US Grand Prix, on lap 8 and shown 39 s behind the live timing to
+match a delayed broadcast. Top left: the live standings with gaps, intervals, tyres and lap times (yellow intervals are within
+1 s). Top right: the projected finish, a Monte Carlo of the rest of the race with each driver's chance of a win, a podium and
+points; below it the predicted battles (coming up and already in range). Bottom: the lap-position line, with every car's dot
+placed from its car telemetry, the sectors coloured and the corners numbered. See "Race dashboard" below.
+
 ## Layout
 
 ```
