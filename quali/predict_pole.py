@@ -45,7 +45,7 @@ def simulate_pole(best, center, pending, p_run, sigma, n_sims=10_000, seed=0):
 
 def predict(all_rows, part=3, as_of=None, verbose=True):
     q = session_state(all_rows, part, as_of)
-    if q is None:
+    if q is None or q.state.empty:       # no driver rows yet, e.g. right as the part starts
         return None
     st = q.state
     best = st['best'].to_numpy(dtype=float)
@@ -80,7 +80,8 @@ def predict(all_rows, part=3, as_of=None, verbose=True):
         print(f'{st["pending"].sum()} drivers still to run: {", ".join(st.index[st["pending"]])}')
         print('pole probability: ' + '  '.join(f'{t["tla"]} {t["prob"]:.1%}' for t in top3))
     return dict(ts=q.now, part=part, clock=q.clock_left, current=current, current_driver=leader,
-                top3=top3, n_pending=int(st['pending'].sum()), p_none=float(p_none))
+                top3=top3, probs=dict(zip(st.index, map(float, probs))),
+                n_pending=int(st['pending'].sum()), p_none=float(p_none))
 
 
 if __name__ == '__main__':

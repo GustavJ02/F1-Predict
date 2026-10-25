@@ -45,6 +45,7 @@ Use another model with `MODEL=quali.my_model ./run_session.sh ...` (a module wit
 MODEL=quali.model ./run_session.sh 2026 Austin quali   # record + parse + cutoff prediction in predictions.csv
 python -m quali.predict_elimination 2026 Austin quali --part 2 --as-of 2026-10-24T21:33:00Z   # one-off run
 python -m quali.predict_pole 2026 Austin quali --as-of 2026-10-24T22:00:30Z            # pole probabilities (Q3)
+python -m quali.backtest_pole 2026                                                  # score pole predictions on every data/2026/*/quali
 ```
 
 ## Testing without a live session
