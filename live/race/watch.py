@@ -121,7 +121,8 @@ def battles_panel(preds, max_lines=30):
     status = batch[batch["kind"] == "status"]
     if len(status):
         return Text(str(status["note"].iloc[0]), style="dim italic")
-    battles = batch[batch["kind"] == "battle"].sort_values(["in_laps", "position"])
+    battles = batch[batch["kind"] == "battle"].dropna(subset=["drivers", "gaps", "laps", "position"])      # (a row cut short is skipped)
+    battles = battles.sort_values(["in_laps", "position"])
     soon, now = battles[~battles["now"].astype(bool)], battles[battles["now"].astype(bool)]
     now_budget = min(len(now) + 1, 8) if len(now) else 0
     lines, used = [], 0
@@ -129,7 +130,7 @@ def battles_panel(preds, max_lines=30):
         lines.append(Text("COMING UP", style="bold underline"))
         used = 1
     for _, b in soon.iterrows():
-        drivers, gaps, laps = b["drivers"].split(), b["gaps"].split(), b["laps"].split()
+        drivers, gaps, laps = str(b["drivers"]).split(), str(b["gaps"]).split(), str(b["laps"]).split()
         if used + len(drivers) + 2 > max_lines - now_budget:
             break
         n = int(float(b["in_laps"]))
@@ -146,7 +147,7 @@ def battles_panel(preds, max_lines=30):
     if len(now):
         lines.append(Text("IN RANGE NOW", style="bold red underline"))
         for _, b in now.head(max(now_budget - 1, 1)).iterrows():
-            drivers, gaps, laps = b["drivers"].split(), b["gaps"].split(), b["laps"].split()
+            drivers, gaps, laps = str(b["drivers"]).split(), str(b["gaps"]).split(), str(b["laps"]).split()
             row = Text(f"P{int(b['position']):<2} {drivers[0]}", style="bold")
             for d, g, k in zip(drivers[1:], gaps, laps):
                 inside = float(k) == 0
@@ -182,7 +183,9 @@ def projection_panel(preds, history=None, max_rows=22):
     paused = preds[preds["kind"] == "projection_status"]
     if len(paused) and paused["ts"].max() >= rows["ts"].max():
         return Text(str(paused.iloc[-1]["note"]), style="bold blue")
-    rows = rows[rows["ts"] == rows["ts"].max()].sort_values("proj_rank")
+    rows = rows[rows["ts"] == rows["ts"].max()].dropna(subset=["tla", "proj_rank", "p_win"]).sort_values("proj_rank")
+    if rows.empty:                                           # the latest rows were cut short by a half-written file
+        return Text("waiting for the first projection (needs a few clean laps) ...", style="dim")
     now = {}
     if history is not None and len(history):
         lat = latest(history)

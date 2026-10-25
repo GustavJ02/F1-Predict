@@ -38,6 +38,13 @@ EVENT_ONLY = ["event", "message", "pit_lane_s"]
 TEL_COLS = ["speed", "rpm", "gear", "throttle", "brake", "x", "y"]
 
 
+def write_atomically(df, path):
+    """Write the CSV to a temporary file and move it into place, so a viewer never reads a half-written predictions.csv."""
+    tmp = path.with_suffix(".tmp")
+    df.to_csv(tmp, index=False)
+    os.replace(tmp, path)
+
+
 def prepare_telemetry(df):
     df["ts"] = pd.to_datetime(df["ts"], format="ISO8601")
     df["driver"] = df["driver"].astype(int).astype(str)
@@ -138,7 +145,7 @@ def main():
                     df = out if isinstance(out, pd.DataFrame) else pd.DataFrame(out if isinstance(out, list) else [out])
                     df.insert(0, "ts", now)
                     preds.append(df)
-                    pd.concat(preds, ignore_index=True).to_csv(sess.predictions, index=False)
+                    write_atomically(pd.concat(preds, ignore_index=True), sess.predictions)
             last_tick = wall
         time.sleep(args.poll)
 

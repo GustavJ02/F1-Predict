@@ -150,3 +150,38 @@ def test_real_race_mid_race():
     assert find_battles(h)[0] == "race finished"
     text = frame(h[h["race_lap"] <= 31], None)
     assert "VER" in text and "LAP 31/62" in text
+
+
+def test_a_predictions_file_with_only_single_pair_battles_still_renders(tmp_path):
+    """pandas reads 'gaps' and 'laps' as numbers when every battle so far is a single pair: the dashboard must cope."""
+    csv = tmp_path / "predictions.csv"
+    csv.write_text("ts,kind,position,drivers,numbers,gaps,laps,in_laps,now,race_lap,total_laps\n"
+                   "2026-10-25T12:00:10Z,battle,7,PIA RUS,81 63,0.9,0,0.0,True,33,56\n"
+                   "2026-10-25T12:00:10Z,battle,3,HAM NOR,44 1,5.7,10,9.6,False,33,56\n")
+    from f1live.watch import read
+    preds = read(csv)
+    assert preds["gaps"].dtype == object and preds["laps"].dtype == object
+    h = race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 3.0}, laps=10, total=40)
+    text = frame(h, preds)                                    # the old behaviour was an AttributeError here
+    assert "PIA" in text and "HAM" in text and "IN RANGE NOW" in text
+    numeric = pd.read_csv(csv)                                # even if a caller passes the numeric version
+    assert numeric["gaps"].dtype == float and "HAM" in frame(h, numeric)
+
+
+def test_rows_cut_short_by_a_half_written_file_are_skipped_not_fatal():
+    h = race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 3.0}, laps=10, total=40)
+    preds = pd.DataFrame([
+        dict(ts=T0, kind="battle", position=7, drivers="PIA RUS", numbers="81 63", gaps="0.9", laps="0", in_laps=0.0, now=True),
+        dict(ts=T0, kind="battle", position=np.nan, drivers=np.nan, numbers=np.nan, gaps=np.nan, laps=np.nan, in_laps=np.nan, now=np.nan),
+        dict(ts=T0, kind="projection", tla=np.nan, proj_rank=np.nan, p_win=np.nan)])
+    text = frame(h, preds)
+    assert "PIA" in text and "RUS" in text
+
+
+def test_the_runner_writes_predictions_atomically(tmp_path):
+    from f1live.runner import write_atomically
+    target = tmp_path / "predictions.csv"
+    write_atomically(pd.DataFrame({"a": [1, 2]}), target)
+    assert pd.read_csv(target)["a"].tolist() == [1, 2] and not (tmp_path / "predictions.tmp").exists()
+    write_atomically(pd.DataFrame({"a": [3]}), target)
+    assert pd.read_csv(target)["a"].tolist() == [3]

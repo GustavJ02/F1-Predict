@@ -34,10 +34,14 @@ def table(df, cols=None, digits=3):
     return lines + ["  ".join(v.rjust(w) for v, w in zip(r, widths)) for r in cells]
 
 
+TEXT_COLUMNS = {"drivers": str, "numbers": str, "gaps": str, "laps": str, "note": str, "plan": str}   # lists written as 'a b c'
+
+
 def read(path):
-    """predictions.csv -> DataFrame, or None if missing / empty / caught mid-write."""
+    """predictions.csv -> DataFrame, or None if missing / empty / caught mid-write. Columns that hold space-separated lists
+    are read as text: with only one-item lists so far pandas would turn them into numbers."""
     try:
-        df = pd.read_csv(path)
+        df = pd.read_csv(path, dtype=TEXT_COLUMNS)
         df["ts"] = pd.to_datetime(df["ts"], format="ISO8601")
     except (FileNotFoundError, pd.errors.EmptyDataError, KeyError, ValueError):
         return None
