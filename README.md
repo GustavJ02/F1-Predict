@@ -94,7 +94,7 @@ Panels (a wide screen shows three columns, a narrower one stacks the last two):
 **Stopped and slow cars, safety car banner.** A car standing still on the track (speed at most 5 km/h for 3 s after it was
 racing, not in the pit lane) gets a red `✖` and a blinking label on the lap-position line and is named above it; a car
 crawling at under 45% of the speed cars normally have at that spot (learned from this race's green-flag running, so slow corners
-and the pit limiter don't count) gets a yellow `▼`. Crawling is only judged under green flags, and nothing is flagged on lap 1,
+and the pit limiter don't count) gets a yellow `▼`. Crawling is only judged under green flags, and nothing is flagged on lap 1, for a car that has retired or is marked OUT in the standings,
 under a red flag or after the chequered flag. A blinking banner above the line says SAFETY CAR, VIRTUAL SAFETY CAR, VSC ENDING or
 RED FLAG. On the 2026 US GP the detector flags only BOT: crawling from 90 s and stopped 4 s before the VSC was announced, with no false alarms from the other 19 cars
 (`live/race/hazards.py`; thresholds at the top of that file). It follows the viewer delay like everything else.

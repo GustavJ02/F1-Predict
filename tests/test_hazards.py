@@ -99,12 +99,13 @@ def test_nothing_is_flagged_on_lap_one_after_the_flag_or_under_red():
     assert not race_is_live(None)
 
 
-def test_a_retired_car_is_still_stopped_but_never_slow():
+def test_a_retired_or_out_car_is_no_longer_flagged():
     h = history(extra=[dict(ts=at(5), event="retired", driver="77")])
     assert retired(h) == {"77"}
-    trail = {"77": samples([180] * 20 + [45] * 8)}
-    assert hazards(trail, h, at(27), lambda x, y: 0.5, profile()) == {}
-    assert hazards(trail, history(), at(27), lambda x, y: 0.5, profile()) == {"77": "slow"}
+    stopped, slow = {"77": samples([180] * 20 + [0] * 8)}, {"77": samples([180] * 20 + [45] * 8)}
+    assert hazards(stopped, h, at(27)) == {} and hazards(slow, h, at(27), lambda x, y: 0.5, profile()) == {}
+    assert hazards(stopped, history(), at(27)) == {"77": "stopped"}
+    assert hazards(stopped, history(), at(27), out=["77"]) == {}                 # marked OUT in the standings
 
 
 def test_slow_is_only_judged_under_green_flags():
@@ -156,15 +157,11 @@ def test_a_stopped_car_is_named_and_marked_on_the_line():
     assert "on track" not in frame({})
 
 
-def test_a_stopped_car_stays_on_the_line_after_it_is_marked_out():
+def test_a_car_marked_out_is_off_the_line_and_the_feed_stops_flagging_it(tmp_path):
     h = race({"BOT": 90.0}, {"BOT": 0}, laps=3, total=56, skip_after={"BOT": 1})
-    h["laps_down"] = 5
-    out = watch.latest(h)
-    out_flag = bool(out.loc["10", "out"])
-    cars = watch.track_cars(h, {"10": 0.3}, {"10": "stopped"})
-    assert [c[0] for c in cars] == ["BOT"] and cars[0][4] == "stopped"
-    if out_flag:
-        assert watch.track_cars(h, {"10": 0.3}) == []
+    h = pd.concat([h, race({"AAA": 90.0}, {"AAA": 0}, laps=12, total=56).assign(driver="11", tla="AAA")], ignore_index=True)
+    assert watch.latest(h).loc["10", "out"]
+    assert [c[0] for c in watch.track_cars(h, {"10": 0.3, "11": 0.5}, {"10": "stopped"})] == ["AAA"]
 
 
 def test_track_line_marks_flagged_cars():
@@ -181,14 +178,6 @@ def test_a_car_stopped_for_longer_than_the_trail_stays_stopped():
     assert hazards(trail, h, at(429)) == {}                            # no sign it was ever racing
     assert hazards(trail, h, at(429), ran={"77": [at(100), at(250)]}) == {"77": "stopped"}
     assert hazards(trail, h, at(429), ran={"77": [at(500)]}) == {}     # that was later than now (viewer delay)
-
-
-def test_a_retired_car_is_shown_stopped_for_a_while_then_dropped():
-    trail = {"77": samples([0] * 30, start=1000)}
-    h = history(extra=[dict(ts=at(900), event="retired", driver="77")])
-    ran = {"77": [at(100)]}
-    assert hazards(trail, h, at(1029), ran=ran) == {"77": "stopped"}
-    assert hazards(trail, h, at(1029 + 400), ran=ran) == {}
 
 
 def test_the_final_lap_is_not_the_finish_until_the_flag_has_fallen():

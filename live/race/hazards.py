@@ -151,25 +151,23 @@ def retired(history):
     return set(history.loc[history["event"] == "retired", "driver"].astype(str))
 
 
-RETIRED_KEEP_S = 300.0     # a retired car is shown as stopped this long: it is probably in the garage by then
-
-
-def hazards(trail, history, at, progress_of=None, profile=None, ran=None):
+def hazards(trail, history, at, progress_of=None, profile=None, ran=None, out=()):
     """{driver: 'stopped' | 'slow'} as of event time `at`. trail: {driver: [(ts, x, y, speed), ...]}; ran: {driver: [ts, ...]}
-    sorted moments the car was seen racing (Feed keeps these for the whole session)."""
+    sorted moments the car was seen racing (Feed keeps these for the whole session). A car that has retired or is `out` (marked OUT
+    in the standings) is no longer a hazard to flag: whatever happened, it is over for the race."""
     if not race_is_live(history):
         return {}
-    windows, gone = pit_windows(history), retired_at(history)
+    windows, gone = pit_windows(history), retired(history) | set(map(str, out))
     green = track_state(history) not in NEUTRAL
     out = {}
     for drv, samples in trail.items():
         if in_pit(windows, drv, at):
             continue
-        if drv in gone and (at - gone[drv]).total_seconds() > RETIRED_KEEP_S:
+        if drv in gone:
             continue
         times = (ran or {}).get(drv)
         i = bisect.bisect_right(times, at) if times else 0
-        kind = classify(samples, at, progress_of, profile, green and drv not in gone, times[i - 1] if i else None)
+        kind = classify(samples, at, progress_of, profile, green, times[i - 1] if i else None)
         if kind:
             out[drv] = kind
     return out

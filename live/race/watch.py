@@ -338,12 +338,12 @@ def sector_legend(sectors):
 
 def track_cars(history, progress, flags=None):
     """[(code, progress, colour, is_leader, flag)] for the cars still running that have a progress. flags: {driver: 'stopped' |
-    'slow'} (live.race.hazards); a car stopped on the track stays on the line even if it has been marked out."""
+    'slow'} (live.race.hazards)."""
     lat = latest(history)
     flags = flags or {}
     cars = []
     for drv, frac in progress.items():
-        if drv not in lat.index or (lat.loc[drv, "out"] and flags.get(drv) != "stopped"):
+        if drv not in lat.index or lat.loc[drv, "out"]:
             continue
         r = lat.loc[drv]
         cars.append((str(r["tla"]), frac, TEAM_COLOUR.get(r.get("team"), "white"), r["position"] == 1, flags.get(drv)))
@@ -450,7 +450,9 @@ class Feed:
         if self.tracker is not None:
             ref = self.tracker.ref
             progress_of = lambda x, y: float(nearest_progress(ref, [x], [y])[0])
-        return hazards(self.trail, history, at, progress_of, self.profile, self.ran)
+        lat = latest(history)
+        out = lat.index[lat["out"]] if len(lat) else ()
+        return hazards(self.trail, history, at, progress_of, self.profile, self.ran, out)
 
     def sectors(self, history=None):
         """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""
