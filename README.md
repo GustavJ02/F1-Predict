@@ -17,12 +17,18 @@ f1live/              shared plumbing (used by everything below)
   replay.py          re-plays one session's raw.txt into another session in (scaled) real time
   watch.py           terminal viewer for predictions.csv (used by the live.*.watch scripts)
   archive.py         downloads a finished session from F1's archive into raw.txt
+  fetch_season.py    downloads (and parses) a whole season, or selected sessions, into data/<year>/<race>/<session>/
 live/                predictions run DURING a session
   quali/             state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both),
                      watch.py (live view), backtest_pole.py (score pole predictions on past sessions)
   race/              model.py (race model template, "current order" baseline - yours to edit),
                      watch.py (live view of the latest prediction, any columns)
+pre/                 predictions made BEFORE a session, from past sessions
+  history.py         pace tables for any session in data/ (best valid lap per driver, gap to the fastest in %)
+  quali/             features.py (form, practice, sprint-quali inputs), predict_grid.py (pole probabilities and
+                     expected grid), backtest.py (score it on every past quali, with ablations)
+  race/              (not built yet)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
 data/                gitignored
   <year>/<race>/<session>/
@@ -62,6 +68,18 @@ python -m live.quali.watch 2026 Austin quali     # cutoff in Q1/Q2, pole probabi
 python -m live.race.watch 2026 Singapore race    # latest batch of rows from the race model
 python -m live.quali.watch 2026 Austin replay --once   # print once and exit
 ```
+
+## Before a session (pre.quali)
+
+```bash
+python -m f1live.fetch_season 2025                                   # all sessions of a season (resumable, ~4 s each)
+python -m f1live.fetch_season 2026 --sessions fp1 fp2 fp3 sq sprint --alias "United States=Austin"
+python -m pre.quali.predict_grid 2026 Austin                         # pole probabilities + expected grid
+python -m pre.quali.backtest                                         # score the model on every quali we have
+```
+
+Session folders from the archive are `fp1 fp2 fp3 sq sprint quali race`; the race folder is the meeting name
+without "Grand Prix" (`Australian`, `Saudi Arabian`, `United States`, ...). `Austin` is an alias of `United States`.
 
 ## Testing without a live session
 

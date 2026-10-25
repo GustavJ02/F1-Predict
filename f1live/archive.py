@@ -85,11 +85,20 @@ def main():
 
     sess = session_from_args(a)
     path = a.path or find_path(a.year, a.race, a.archive_name or ARCHIVE_NAMES.get(a.session, a.session))
-    out = sess.raw
-    if out.exists():
-        sys.exit(f"{out} already exists; move it away first")
+    if sess.raw.exists():
+        sys.exit(f"{sess.raw} already exists; move it away first")
+    try:
+        download(path, sess.raw)
+    except RuntimeError as e:
+        sys.exit(str(e))
+
+
+def download(path, out, verbose=True):
+    """Fetch every topic of the archive session at `path` and write it to `out` in the live recorder's format.
+    Written to a temp file first, so an interrupted download never leaves a half-written raw.txt behind."""
     out.parent.mkdir(parents=True, exist_ok=True)
-    print("fetching", path)
+    if verbose:
+        print("fetching", path)
 
     events = []
     for topic in TOPICS:
@@ -97,18 +106,20 @@ def main():
         for off, payload in stream(path, topic):
             events.append((off, topic, payload))
             n += 1
-        print(f"  {topic}: {n} messages")
+        if verbose:
+            print(f"  {topic}: {n} messages")
 
     # Offsets are relative to the stream start; anchor them with absolute UTC stamps in the payloads.
     # ExtrapolatedClock anchors agree with the live recording to the ms (constant across the session);
     # a single Heartbeat is ~2 s off and later ones drift, so Heartbeat is only the fallback.
     t0 = anchor(events, "ExtrapolatedClock") or anchor(events, "Heartbeat")
     if t0 is None:
-        sys.exit("no ExtrapolatedClock/Heartbeat in archive; cannot anchor timestamps")
+        raise RuntimeError("no ExtrapolatedClock/Heartbeat in archive; cannot anchor timestamps")
 
     events.sort(key=lambda e: e[0])
     first_seen = set()
-    with open(out, "w") as f:
+    tmp = out.with_suffix(".tmp")
+    with open(tmp, "w") as f:
         for off, topic, payload in events:
             ts = (t0 + timedelta(seconds=off)).isoformat(timespec="milliseconds") + "Z"
             # The first message of a topic is its full state: write it as a keyframe (ts '') like the live
@@ -117,7 +128,10 @@ def main():
                 ts = ""
             first_seen.add(topic)
             f.write(str([topic, payload, ts]) + "\n")
-    print(f"wrote {len(events)} messages to {out}")
+    tmp.replace(out)
+    if verbose:
+        print(f"wrote {len(events)} messages to {out}")
+
 
 if __name__ == "__main__":
     main()
