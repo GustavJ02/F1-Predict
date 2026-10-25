@@ -38,7 +38,7 @@ from f1live.paths import add_session_args, session_from_args
 from f1live.tail import CsvTail
 from f1live.watch import read
 from live.race.battles import HORIZON, THRESH, latest
-from live.race.hazards import BANNERS, SpeedProfile, hazards, neutral_at, track_state
+from live.race.hazards import BANNERS, RAN_KMH, SpeedProfile, hazards, neutral_at, track_state
 from live.race.pace import driver_pace
 from live.race.track import (TrackProgress, build_reference, load_corners, load_reference, nearest_progress,
                              sector_fractions, timing_progress)
@@ -383,6 +383,7 @@ class Feed:
         self.buffer = []                  # telemetry kept only until the reference lap exists
         self.pos = {}                     # driver -> (ts, x, y, speed)
         self.trail = {}                   # driver -> [(ts, x, y, speed), ...] the last TRAIL_S seconds, to show the race as it was
+        self.ran = {}                     # driver -> thinned moments the car was seen racing (for 'stopped' beyond the trail)
         self.profile = SpeedProfile()     # what speed is normal where on the lap, to spot a car crawling (live.race.hazards)
         self.strategy, self._strategy_stamp = None, None      # strategy.csv from play.field --loop
         self.tracker = None
@@ -401,7 +402,7 @@ class Feed:
         self.poll_strategy()
         fresh = self.tel.read()
         if isinstance(fresh, str):
-            self.pos, self.trail, self.buffer = {}, {}, []
+            self.pos, self.trail, self.buffer, self.ran = {}, {}, [], {}
         elif fresh is not None:
             ok = fresh.dropna(subset=["x", "y"])
             for drv, r in ok.groupby("driver").tail(1).set_index("driver").iterrows():
@@ -409,6 +410,11 @@ class Feed:
             for drv, g in ok.groupby("driver"):
                 self.trail.setdefault(drv, []).extend(zip(g["ts"], g["x"], g["y"], g["speed"]))
             self._learn_speeds(ok)
+            for drv, g in ok[ok["speed"] > RAN_KMH].groupby("driver"):
+                times = self.ran.setdefault(drv, [])
+                for ts in g["ts"]:
+                    if not times or (ts - times[-1]).total_seconds() >= 10:
+                        times.append(ts)
             newest = ok["ts"].max() if len(ok) else None
             if newest is not None:
                 cutoff = newest - pd.Timedelta(self.TRAIL_S, unit="s")
@@ -444,7 +450,7 @@ class Feed:
         if self.tracker is not None:
             ref = self.tracker.ref
             progress_of = lambda x, y: float(nearest_progress(ref, [x], [y])[0])
-        return hazards(self.trail, history, at, progress_of, self.profile)
+        return hazards(self.trail, history, at, progress_of, self.profile, self.ran)
 
     def sectors(self, history=None):
         """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""

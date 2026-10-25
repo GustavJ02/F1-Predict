@@ -17,6 +17,7 @@ average finishing position, which orders the projection.
 import numpy as np
 import pandas as pd
 from live.race.battles import latest
+from live.race.hazards import chequered
 from live.race.pace import clean_laps, lap_rows, lap_temps
 from live.race.priors import COMPOUNDS, MIN_TEMP, circuit_of
 
@@ -149,7 +150,7 @@ def project(history, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     t_lead, n0, total = meta
     R = total - n0
     if R <= 1:
-        return None, "race finished" if R <= 0 else "last lap"
+        return None, "race finished" if R <= 0 and chequered(history) else "last lap"
     track = history["track_status"].dropna().iloc[-1] if history["track_status"].notna().any() else "AllClear"
     opt.setdefault("temp", cars.attrs.get("track_temp"))
     return simulate(cars, meta, track, priors, circuit, n_sims, seed, **opt)

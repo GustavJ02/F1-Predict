@@ -7,7 +7,7 @@ import io
 
 from live.race import model, priors as P, watch
 from live.race.projection import project, sample_stint
-from test_battles import T0, race
+from test_battles import T0, race, with_flag
 
 NEVER = {"age": [500], "surv": [0.5]}               # a stint curve that never stops within a race (half the draws are inf)
 
@@ -100,6 +100,8 @@ def test_safety_car_chance_and_nothing_to_project_at_the_flag():
     _, info0 = project(synth(), priors(sc=0.0), "Test", n_sims=50)
     assert info0["p_sc"] == 0.0
     out, why = project(synth(laps=10, total=10), priors(), "Test")
+    assert out is None and why == "last lap"                    # final lap: the flag has not fallen
+    out, why = project(with_flag(synth(laps=10, total=10)), priors(), "Test")
     assert out is None and why == "race finished"
     assert project(synth(laps=9, total=10), priors(), "Test")[1] == "last lap"
 

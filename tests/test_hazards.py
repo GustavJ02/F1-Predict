@@ -92,7 +92,9 @@ def test_hazards_skips_cars_in_the_pits_and_names_the_stopped_one():
 def test_nothing_is_flagged_on_lap_one_after_the_flag_or_under_red():
     trail = {"77": samples([180] * 20 + [0] * 8)}
     assert hazards(trail, history(lap=1), at(27)) == {}
-    assert hazards(trail, history(lap=56), at(27)) == {}
+    flag = dict(ts=at(20), event="race_control", message="CHEQUERED FLAG")
+    assert hazards(trail, history(lap=56), at(27)) == {"77": "stopped"}      # the final lap still counts
+    assert hazards(trail, history(lap=56, extra=[flag]), at(27)) == {}
     assert hazards(trail, history(status="Red"), at(27)) == {}
     assert not race_is_live(None)
 
@@ -171,3 +173,31 @@ def test_track_line_marks_flagged_cars():
     console.print(watch.TrackLine(cars, flash=True))
     out = console.file.getvalue()
     assert "✖" in out and "◆" in out and "BOT" in out and "VER" in out
+
+
+def test_a_car_stopped_for_longer_than_the_trail_stays_stopped():
+    trail = {"77": samples([0] * 30, start=400)}                       # nothing but standing still in view
+    h = history()
+    assert hazards(trail, h, at(429)) == {}                            # no sign it was ever racing
+    assert hazards(trail, h, at(429), ran={"77": [at(100), at(250)]}) == {"77": "stopped"}
+    assert hazards(trail, h, at(429), ran={"77": [at(500)]}) == {}     # that was later than now (viewer delay)
+
+
+def test_a_retired_car_is_shown_stopped_for_a_while_then_dropped():
+    trail = {"77": samples([0] * 30, start=1000)}
+    h = history(extra=[dict(ts=at(900), event="retired", driver="77")])
+    ran = {"77": [at(100)]}
+    assert hazards(trail, h, at(1029), ran=ran) == {"77": "stopped"}
+    assert hazards(trail, h, at(1029 + 400), ran=ran) == {}
+
+
+def test_the_final_lap_is_not_the_finish_until_the_flag_has_fallen():
+    from live.race.battles import find_battles
+    from live.race.hazards import chequered
+    h = race({"AAA": 90.0, "BBB": 90.0}, {"AAA": 0, "BBB": 1.0}, laps=10, total=10)       # lap counter 10/10
+    status, _ = find_battles(h)
+    assert status != "race finished" and not chequered(h)
+    flag = pd.DataFrame([dict(ts=h["ts"].max() + pd.Timedelta(60, unit="s"), event="race_control", message="CHEQUERED FLAG")])
+    h = pd.concat([h, flag], ignore_index=True)
+    assert chequered(h) and find_battles(h)[0] == "race finished"
+    assert not race_is_live(h)

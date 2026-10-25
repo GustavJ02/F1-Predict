@@ -10,6 +10,7 @@ stint), neither is in the pit lane or out of the race, the interval to the car a
 """
 import numpy as np
 import pandas as pd
+from live.race.hazards import chequered
 from live.race.pace import driver_pace
 
 THRESH = 1.0            # s, DRS range
@@ -88,9 +89,9 @@ def find_battles(history, use_slope=False, horizon=HORIZON, **pace_kw):
     lap = history[history["race_lap"].notna() & history["total_laps"].notna()].tail(1)
     if len(lap):                      # no contact can happen after the flag
         remaining = int(lap["total_laps"].iloc[0] - lap["race_lap"].iloc[0])
-        if remaining <= 0:
+        if remaining <= 0 and chequered(history):      # the counter shows total/total for the whole final lap
             return "race finished", []
-        horizon = min(horizon, remaining)
+        horizon = min(horizon, max(remaining, 1))
     track = history["track_status"].dropna().iloc[-1] if history["track_status"].notna().any() else None
     if track not in (None, "AllClear"):
         return f"{track}: predictions paused", []

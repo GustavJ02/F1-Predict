@@ -10,6 +10,7 @@ Both are only raised while the race is running (lap 2 on, not red-flagged, not a
 BOT in the 2026 US GP is the pattern this was built from: about a minute in first gear at 30-55 km/h, then stationary, and
 the VSC ten seconds later.
 """
+import bisect
 from collections import deque
 
 import numpy as np
@@ -41,18 +42,19 @@ class SpeedProfile:
         return float(np.median(s)) if len(s) >= MIN_BIN_SAMPLES else None
 
 
-def classify(samples, at, progress_of=None, profile=None, green=True):
+def classify(samples, at, progress_of=None, profile=None, green=True, last_ran=None):
     """None, 'stopped' or 'slow' for one car at event time `at`.
 
     samples: [(ts, x, y, speed), ...] in time order; progress_of(x, y) -> lap fraction (or None) and the profile are only needed
-    for 'slow'."""
+    for 'slow'. last_ran: when the car was last seen above RAN_KMH, if known beyond `samples` (so a car that has been stopped
+    for longer than the trail stays stopped)."""
     recent = [s for s in samples if s[0] <= at]
     if not recent:
         return None
     stop = [s for s in recent if (at - s[0]).total_seconds() <= STOP_S]
     if len(stop) >= 2 and all(_speed(s) <= STOP_KMH for s in stop):
         earlier = [_speed(s) for s in recent if STOP_S < (at - s[0]).total_seconds() <= RAN_S]
-        if earlier and max(earlier) > RAN_KMH:
+        if (earlier and max(earlier) > RAN_KMH) or (last_ran is not None and last_ran <= at):
             return "stopped"
     if green and progress_of is not None and profile is not None:
         window = [s for s in recent if (at - s[0]).total_seconds() <= SLOW_S]
@@ -83,6 +85,14 @@ BANNERS = {"SCDeployed": "SAFETY CAR", "SCEnding": "SAFETY CAR ENDING", "VSCDepl
            "VSCEnding": "VSC ENDING", "Red": "RED FLAG"}
 
 
+def chequered(history):
+    """Has the chequered flag been shown? (The lap counter reads total/total for the whole final lap, so it can't tell.)"""
+    if history is None or history.empty or "message" not in history:
+        return False
+    msg = history.loc[history["event"] == "race_control", "message"].dropna()
+    return bool(msg.astype(str).str.contains("CHEQUERED FLAG", case=False).any())
+
+
 def race_is_live(history):
     """Is it a moment at which a stopped car means something: past lap 1, not red-flagged, not finished."""
     if history is None or history.empty:
@@ -90,8 +100,7 @@ def race_is_live(history):
     row = history[history["race_lap"].notna()].tail(1)
     if row.empty:
         return False
-    lap, total = row["race_lap"].iloc[0], row["total_laps"].iloc[0]
-    if lap < 2 or (total == total and lap >= total):
+    if row["race_lap"].iloc[0] < 2 or chequered(history):
         return False
     return track_state(history) != "Red"
 
@@ -127,6 +136,14 @@ def in_pit(windows, driver, at):
     return any(a <= at <= b for a, b in windows.get(str(driver), ()))
 
 
+def retired_at(history):
+    """{driver: when the retirement was reported}."""
+    if history is None or history.empty:
+        return {}
+    r = history[history["event"] == "retired"]
+    return {str(d): ts for d, ts in zip(r["driver"], r["ts"])}
+
+
 def retired(history):
     """Drivers who have retired (their 'slow' is no news; a stopped car still is)."""
     if history is None or history.empty:
@@ -134,17 +151,25 @@ def retired(history):
     return set(history.loc[history["event"] == "retired", "driver"].astype(str))
 
 
-def hazards(trail, history, at, progress_of=None, profile=None):
-    """{driver: 'stopped' | 'slow'} as of event time `at`. trail: {driver: [(ts, x, y, speed), ...]}."""
+RETIRED_KEEP_S = 300.0     # a retired car is shown as stopped this long: it is probably in the garage by then
+
+
+def hazards(trail, history, at, progress_of=None, profile=None, ran=None):
+    """{driver: 'stopped' | 'slow'} as of event time `at`. trail: {driver: [(ts, x, y, speed), ...]}; ran: {driver: [ts, ...]}
+    sorted moments the car was seen racing (Feed keeps these for the whole session)."""
     if not race_is_live(history):
         return {}
-    windows, gone = pit_windows(history), retired(history)
+    windows, gone = pit_windows(history), retired_at(history)
     green = track_state(history) not in NEUTRAL
     out = {}
     for drv, samples in trail.items():
         if in_pit(windows, drv, at):
             continue
-        kind = classify(samples, at, progress_of, profile, green and drv not in gone)
+        if drv in gone and (at - gone[drv]).total_seconds() > RETIRED_KEEP_S:
+            continue
+        times = (ran or {}).get(drv)
+        i = bisect.bisect_right(times, at) if times else 0
+        kind = classify(samples, at, progress_of, profile, green and drv not in gone, times[i - 1] if i else None)
         if kind:
             out[drv] = kind
     return out

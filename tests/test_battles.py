@@ -76,11 +76,19 @@ def test_cars_in_range_now_are_a_battle_and_neighbouring_pairs_group():
     assert len(battles) == 1 and battles[0]["drivers"] == ["AAA", "BBB", "CCC"] and battles[0]["now"]
 
 
+def with_flag(h):
+    """The race rows plus the chequered flag falling a minute after the last of them."""
+    flag = pd.DataFrame([dict(ts=h["ts"].max() + pd.Timedelta(60, unit="s"), event="race_control", message="CHEQUERED FLAG")])
+    return pd.concat([h, flag], ignore_index=True)
+
+
 def test_predictions_pause_under_safety_car_and_stop_at_the_flag():
     h = race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 6.0}, laps=6, track={6: "SCDeployed"})
     h["track_status"] = h["track_status"].where(h["lap_number"] < 7, "SCDeployed")
     assert find_battles(h)[0] == "SCDeployed: predictions paused"
-    assert find_battles(race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 6.0}, laps=6, total=6))[0] == "race finished"
+    final = race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 6.0}, laps=6, total=6)
+    assert find_battles(final)[0] != "race finished"             # the counter reads 6/6 for the whole final lap
+    assert find_battles(with_flag(final))[0] == "race finished"
 
 
 def test_collecting_pace_data_early_and_stale_cars_are_out():
