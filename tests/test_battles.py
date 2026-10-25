@@ -24,11 +24,13 @@ def race(paces, gaps, laps=10, total=30, track=None, skip_after=None):
     track = track or {}
     rows, gap = [], dict(gaps)
     for lap in range(1, laps + 1):
+        cum = 0.0                                              # gap to the leader = the intervals down the order
         for i, (tla, pace) in enumerate(paces.items()):
+            cum += 0.0 if i == 0 else gap[tla]
             if skip_after and lap > skip_after.get(tla, 10 ** 9):
                 continue
             rows.append(dict(ts=T0 + pd.Timedelta(float(lap * 90 + i), unit="s"), event="lap", driver=str(10 + i), tla=tla,
-                             position=i + 1, interval_s=None if i == 0 else gap[tla], gap_to_leader_s=0.0, laps_down=0,
+                             position=i + 1, interval_s=None if i == 0 else gap[tla], gap_to_leader_s=cum, laps_down=0,
                              in_pit=False, n_pit_stops=0, compound="MEDIUM", tyre_laps=lap, stint=1, lap_number=lap + 1,
                              lap_time_s=pace + 0.01 * ((lap * 7 + i) % 3), lap_kind="racing",
                              track_status=track.get(lap, "AllClear"), status_code=1, race_lap=lap, total_laps=total,
@@ -91,10 +93,13 @@ def test_collecting_pace_data_early_and_stale_cars_are_out():
 def test_model_returns_battle_rows_or_a_status_row():
     h = race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 6.0}, laps=6)
     info = dict(race_lap=6, total_laps=30)
+    model._last["key"] = None
     out = model.predict(pd.DataFrame({"x": [1]}), h, info)
-    assert list(out["kind"]) == ["battle"] and out["drivers"].iloc[0] == "AAA BBB" and out["race_lap"].iloc[0] == 6
+    battle = out[out["kind"] == "battle"]
+    assert list(battle["kind"]) == ["battle"] and battle["drivers"].iloc[0] == "AAA BBB" and out["race_lap"].iloc[0] == 6
     early = model.predict(pd.DataFrame({"x": [1]}), race({"AAA": 90.0, "BBB": 89.5}, {"AAA": 0, "BBB": 6.0}, laps=2), info)
-    assert early["kind"] == "status" and "pace" in early["note"]
+    status = early[early["kind"] == "status"]
+    assert list(status["kind"]) == ["status"] and "pace" in status["note"].iloc[0]
     assert model.predict(pd.DataFrame(), h, info) is None
 
 

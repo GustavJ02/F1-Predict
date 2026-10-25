@@ -26,8 +26,10 @@ live/                predictions run DURING a session
                      watch.py (live view), backtest_pole.py (score pole predictions on past sessions),
                      prior.py (pace prior for Q1/Q2 from earlier sessions + parts), backtest_cutoff.py (score the cutoff)
   race/              pace.py (race pace per driver), battles.py (who will be within 1 s of whom, in how many laps),
-                     model.py (runner hook: writes the battles to predictions.csv), watch.py (full-screen dashboard),
-                     backtest_battles.py (score the battle predictions on every recorded race)
+                     track.py (lap progress of each car from telemetry), priors.py + priors.json (what past races say
+                     about tyres, stops, passing and safety cars), projection.py (Monte Carlo of the rest of the race),
+                     model.py (runner hook: battles + projection into predictions.csv), watch.py (full-screen dashboard),
+                     backtest_battles.py / backtest_projection.py (score both on every recorded race)
 pre/                 predictions made BEFORE a session, from past sessions
   history.py         pace tables for any session in data/ (best valid lap per driver, gap to the fastest in %)
   quali/             parts.py (pace of each of Q1/Q2/Q3 from earlier sessions and parts), features.py (form, practice,
@@ -50,33 +52,54 @@ commands take `year race session` and are run from the repo root.
 ## Race dashboard
 
 ```bash
-./run_session.sh 2026 Singapore race            # record + parse + battle predictions
+./run_session.sh 2026 Singapore race            # record + parse + battle and finish predictions
 python -m live.race.watch 2026 Singapore race   # in a second, full-screen terminal (Ctrl-C quits)
 ```
 
-Left: lap counter, track status and the live standings with car number, driver code, gap to the leader, interval to the
-car ahead (yellow = within 1 s), tyre and age, pit stops, last and best lap. Retired and stopped cars show OUT.
-Right: **Coming up**, predicted battles ("Battle for 4th in ~3 laps": which cars, the gap to the car ahead, and when each
-pair gets within range), and **In range now**, battles already happening.
+Panels (a wide screen shows three columns, a narrower one stacks the last two):
+- **Standings:** lap counter, track status, car number, driver code, gap to the leader, interval to the car ahead
+  (yellow = within 1 s), tyre and age, pit stops, last and best lap. Retired and stopped cars show OUT.
+- **Projected finish:** the projected finishing order with each car's chance of winning, of a podium and of points, how
+  it moves against now (▲▼) and the expected number of stops still to come, plus the chance of a safety car / VSC.
+- **Battles:** *Coming up* (predicted battles: which cars, the gap, and in how many laps each pair is within 1 s) and
+  *In range now*.
+- **Lap position:** one line for the lap (start/finish at both ends) with a dot and driver code per car at its position along
+  the lap, so the gaps between cars show up as distance on the line (the leader is a diamond; close cars get their labels
+  staggered above). Positions come from car telemetry projected onto a reference lap (`live/race/track.py`), built from the
+  race's own first clean lap, or loaded at once from `data/<year>/<race>/track.csv`, which
+  `python -m live.race.track 2026 Austin quali` writes from any session's telemetry (so it can be ready before the race;
+  sync it with `--what track`). Without telemetry the positions are estimated from lap timing and the panel says so.
 
-How the battle prediction works (`live/race/battles.py`): a driver's pace is the median of the last 4 clean racing laps on
-the current stint (no in/out laps, green flag only, not lap 1-2); with fewer than 3 clean laps the car has no pace and the
-model says "collecting pace data". For each pair of neighbours the gap closes by the pace difference per lap, so
-`laps = (gap - 1 s) / (pace_ahead - pace_behind)`. Cars in the pit lane, out of the race, or lapped relative to the car
-ahead are skipped, predictions pause under safety car / VSC / red flag, and nothing is predicted past the flag.
+**Battle prediction** (`live/race/battles.py`): a driver's pace is the median of the last 4 clean racing laps on the
+current stint (no in/out laps, green flag only, not lap 1-2); with fewer than 3 clean laps there is no pace and the model
+says "collecting pace data". For each pair of neighbours the gap closes by the pace difference per lap, so
+`laps = (gap - 1 s) / (pace_ahead - pace_behind)`. Pit-lane cars, retired cars and cars lapped relative to the car ahead are
+skipped, predictions pause under safety car / VSC / red flag, and nothing is predicted past the flag.
+`python -m live.race.backtest_battles` replays 25 races: for pairs more than 2 s apart, when it predicts contact within
+8 laps it is right 87% of the time (about 61% of such pairs make contact anyway), typical timing error about 2 laps. It finds
+only about 30% of the battles that happen: contact caused by tyre wear, strategy or traffic isn't visible from lap times.
 
-How good is it? `python -m live.race.backtest_battles` replays 25 races (2025 + Singapore 2026): for pairs more than 2 s
-apart, when it predicts contact within 8 laps it is right 87% of the time (about 61% of such pairs make contact anyway
-within 8 laps), with a typical timing error of about 2 laps. It finds only about 30% of the battles that happen: contact
-caused by tyre wear, strategy or traffic isn't visible from lap times. A lap-time trend and longer windows didn't help.
+**Projected finish** (`live/race/projection.py`, recomputed once per leader lap or when the track status changes): a Monte
+Carlo of the rest of the race, 400 runs. Each simulated lap, every car gets a lap time from its own pace (its recent clean
+laps), the tyre it is on and the fuel burned, plus noise. A car pits when its tyre age reaches a stint length drawn from
+past stints on that compound (Kaplan-Meier, so stints that ended with the race count as long ones); a car that hasn't used two
+dry compounds must stop; a stop costs the circuit's pit loss and the next compound follows historical switches. A car can't
+follow closer than 1 s and, when it is faster, passes with the probability past races give for its pace advantage *at this
+circuit* (Monaco is hard, Abu Dhabi and Saudi Arabia easy); safety cars and VSCs happen at the circuit's rate, bunch the
+field up, forbid passing and make stops cheaper; cars retire at a small rate. Averaging the finishing positions gives each
+car's chances and the projected order.
 
-Bottom strip: **lap position**, one line for the lap (start/finish at both ends) with a dot and the driver code for each
-car at its position along the lap, so the gaps between cars show up as distance on the line (the leader is a diamond;
-close cars get their labels staggered above). Positions come from car telemetry projected onto a reference lap
-(`live/race/track.py`), built from the race's own first clean lap, or loaded at once from
-`data/<year>/<race>/track.csv`, which `python -m live.race.track 2026 Austin quali` writes from any session's telemetry
-(so it can be ready before the race; sync it with `--what track`). Without telemetry the positions are estimated from
-lap timing (time since the car's last crossing / its pace) and the panel says so.
+The assumptions come from `live/race/priors.json`, estimated from the recorded races by `python -m live.race.priors` (re-run it
+after a few more races): about 0.05 s per lap faster as fuel burns, soft/medium/hard wear 0.060/0.045/0.033 s per lap of
+age, soft about 0.38 s faster than medium, a pit loss of about 22 s, a safety car on about 1.2% of laps, and for passing
+logit(p) = -3.05 + 2.06 x pace advantage + a circuit effect. `python -m live.race.backtest_projection` scores it on every race
+at 25%, 50% and 75% distance with the priors refitted *without* that race (leave one race out; other years of the same
+circuit are kept): average rank error 1.77 places against 1.97 for "assume the current order", rank correlation 0.87 vs 0.85,
+winner right 76% vs 72%, top 10 right 88% vs 87% (the exact podium set: 81% vs 83%), and the chances are calibrated (cars
+given about 50% for a podium got one 52% of the time, those given 88% got one 90%). That is a moderate edge in order,
+the main value is the probabilities: track position is very sticky, a plain pace extrapolation does *worse* than the current
+order (2.21 places), and the largest gains came from modelling who can actually pass. Not modelled yet: weather, penalties,
+damage, team orders, and updating the circuit's passing difficulty from the race itself.
 
 The standings come from the most recent row of each driver in `events.csv`; `run_session.sh` writes a snapshot of all
 drivers every 5 s (`SNAPSHOT`), which keeps them consistent. A finished session parsed without `--snapshot`

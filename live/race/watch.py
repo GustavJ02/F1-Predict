@@ -8,6 +8,9 @@ Reads events.csv (standings, gaps, tyres), predictions.csv (from live.race.model
 running, telemetry.csv (where each car is on track) of the session. The screen redraws whenever a file changes;
 Ctrl-C quits.
 
+Columns: standings | projected finishing order (win / podium / points chances from a Monte Carlo of the rest of the
+race, live.race.projection) | battles; a narrower screen stacks the last two on the right.
+
 Bottom strip: one line for the lap with a dot per car at its position along the lap, so the gaps between cars can be
 seen (live.race.track). Without telemetry the positions are estimated from lap timing.
 """
@@ -98,7 +101,10 @@ def battles_panel(preds, max_lines=30):
     """Right panel: 'Coming up' (predicted battles, one line per car) above 'In range now' (one line per battle)."""
     if preds is None or preds.empty:
         return Text("waiting for predictions ...", style="dim")
-    batch = preds[preds["ts"] == preds["ts"].max()]
+    rows = preds[preds["kind"].isin(["battle", "status"])]
+    if rows.empty:
+        return Text("waiting for predictions ...", style="dim")
+    batch = rows[rows["ts"] == rows["ts"].max()]
     status = batch[batch["kind"] == "status"]
     if len(status):
         return Text(str(status["note"].iloc[0]), style="dim italic")
@@ -135,6 +141,52 @@ def battles_panel(preds, max_lines=30):
                 row.append(d, style="bold")
             lines.append(row)
     return Group(*lines) if lines else Text("no battles expected", style="dim")
+
+
+def pct(p):
+    """Probability as a table cell: '-' for under half a percent, '100' for the rest of the way up."""
+    if pd.isna(p) or p < 0.005:
+        return "-"
+    return "100" if p >= 0.995 else f"{p * 100:.0f}"
+
+
+def prob_style(p, strong="green"):
+    return f"bold {strong}" if p >= 0.5 else (strong if p >= 0.1 else "dim")
+
+
+def projection_panel(preds, history=None, max_rows=22):
+    """Projected finishing order from the Monte Carlo (kind='projection' rows): rank, change vs now, win / podium /
+    points probabilities and the expected number of stops still to come."""
+    rows = preds[preds["kind"] == "projection"] if preds is not None and "kind" in preds else None
+    if rows is None or rows.empty:
+        return Text("waiting for the first projection (needs a few clean laps) ...", style="dim")
+    status = preds[preds["kind"] == "status"]
+    if len(status) and status.iloc[-1]["ts"] >= rows["ts"].max() and status.iloc[-1]["note"] == "race finished":
+        return Text("race finished: the standings are the result", style="dim italic")
+    rows = rows[rows["ts"] == rows["ts"].max()].sort_values("proj_rank")
+    now = {}
+    if history is not None and len(history):
+        lat = latest(history)
+        run = lat[~lat["out"] & lat["position"].notna()].sort_values("position")
+        now = {d: i + 1 for i, d in enumerate(run.index)}                  # rank among the cars still running
+    t = Table(box=None, pad_edge=False, header_style="bold dim", expand=True)
+    for name, just in (("#", "right"), ("DRV", "left"), ("NOW", "right"), ("WIN%", "right"), ("PODIUM%", "right"),
+                       ("PTS%", "right"), ("STOPS", "right")):
+        t.add_column(name, justify=just, no_wrap=True)
+    for _, r in rows.head(max_rows).iterrows():
+        cur = now.get(str(r["driver"]), None)
+        move = Text("")
+        if cur is not None:
+            d = cur - int(r["proj_rank"])
+            move = Text(f"▲{d}", style="green") if d > 0 else Text(f"▼{-d}", style="red") if d < 0 else Text("=", style="dim")
+        t.add_row(str(int(r["proj_rank"])), Text(str(r["tla"]), style="bold"), move,
+                  Text(pct(r["p_win"]), style=prob_style(r["p_win"])), Text(pct(r["p_podium"]), style=prob_style(r["p_podium"])),
+                  Text(pct(r["p_points"]), style=prob_style(r["p_points"], "cyan")), f"{r['stops_left']:.1f}")
+    first = rows.iloc[0]
+    note = f"{int(first['laps_left'])} laps left  ·  safety car / VSC chance {first['p_sc'] * 100:.0f}%"
+    if isinstance(first.get("note"), str) and first["note"]:
+        note += f"  ·  {first['note']}"
+    return Group(Text(note, style="dim"), t)
 
 
 def header(history, preds, sess):
@@ -276,19 +328,28 @@ def prepare_telemetry(df):
     return df
 
 
-def render(history, preds, sess="", height=40, progress=None):
+def render(history, preds, sess="", height=40, progress=None, width=140):
     """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
-    progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line."""
+    progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line.
+    A wide screen gets three columns (standings | projected finish | battles); otherwise the right column is split."""
     layout = Layout()
     layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 4))
-    layout["body"].split_row(Layout(name="left", ratio=3), Layout(name="right", ratio=2))
-    layout["head"].update(header(history, preds, sess) if history is not None and len(history) else Text(f" {sess}  waiting ..."))
-    layout["left"].update(Panel(standings_table(history) if history is not None and len(history) else Text("waiting ..."),
-                                title="Standings", title_align="left"))
-    layout["right"].update(Panel(battles_panel(preds, max_lines=max(height - 6, 8)), title="Battles (pace-based)", title_align="left",
-                                 subtitle=f"within {THRESH:.0f} s, next {HORIZON} laps", subtitle_align="left"))
+    ok = history is not None and len(history)
+    proj_panel = Panel(projection_panel(preds, history), title="Projected finish", title_align="left",
+                       subtitle="Monte Carlo of the rest of the race", subtitle_align="left")
+    battle_panel = Panel(battles_panel(preds, max_lines=max(height - 6 if width >= 150 else (height - 14) // 2, 8)),
+                         title="Battles (pace-based)", title_align="left",
+                         subtitle=f"within {THRESH:.0f} s, next {HORIZON} laps", subtitle_align="left")
+    stand_panel = Panel(standings_table(history) if ok else Text("waiting ..."), title="Standings", title_align="left")
+    if width >= 150:
+        layout["body"].split_row(Layout(stand_panel, name="left", ratio=5), Layout(proj_panel, name="mid", ratio=4),
+                                 Layout(battle_panel, name="right", ratio=4))
+    else:
+        layout["body"].split_row(Layout(stand_panel, name="left", ratio=3), Layout(name="right", ratio=2))
+        layout["right"].split_column(Layout(proj_panel, name="proj", ratio=3), Layout(battle_panel, name="battles", ratio=2))
+    layout["head"].update(header(history, preds, sess) if ok else Text(f" {sess}  waiting ..."))
     prog, mode = progress or ({}, None)
-    cars = track_cars(history, prog) if history is not None and len(history) and prog else []
+    cars = track_cars(history, prog) if ok and prog else []
     note = {"telemetry": "from car telemetry", "timing": "estimated from lap timing"}.get(mode, "waiting for positions")
     layout["foot"].update(Panel(TrackLine(cars) if cars else Text("no positions yet", style="dim"),
                                 title=f"Lap position ({note})", title_align="left",
@@ -305,13 +366,13 @@ def main():
     sess = session_from_args(args)
     feed = Feed(sess)
 
-    def frame(height):
-        return render(feed.history, read(sess.predictions), str(sess), height, feed.progress())
+    def frame(height, width):
+        return render(feed.history, read(sess.predictions), str(sess), height, feed.progress(), width)
 
     if args.once or not sys.stdout.isatty():
         feed.poll()
-        console = Console(width=args.once and 140 or None, height=50 if args.once else None)
-        console.print(frame(console.height) if feed.history is not None else Text(f"{sess}: no events yet"))
+        console = Console(width=args.once and 170 or None, height=50 if args.once else None)
+        console.print(frame(console.height, console.width) if feed.history is not None else Text(f"{sess}: no events yet"))
         return
     console = Console()
     stamp = None
@@ -324,7 +385,7 @@ def main():
                             for p in (sess.events, sess.predictions, sess.telemetry))
                 if now != stamp or console.size != getattr(live, "_size", None):
                     stamp, live._size = now, console.size
-                    live.update(frame(console.height) if feed.history is not None
+                    live.update(frame(console.height, console.width) if feed.history is not None
                                 else Text(f" {sess}: waiting for events.csv ..."), refresh=True)
                 time.sleep(args.interval)
         except KeyboardInterrupt:
