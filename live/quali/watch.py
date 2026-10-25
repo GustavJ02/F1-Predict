@@ -1,8 +1,8 @@
-"""Live view of quali/model.py predictions: cutoff in Q1/Q2, pole probabilities in Q3.
+"""Live view of live/quali/model.py predictions: cutoff in Q1/Q2, pole probabilities in Q3.
 
 Usage (from the repo root, in a second terminal next to ./run_session.sh):
-    python -m quali.watch 2026 Austin quali
-    python -m quali.watch 2026 Austin replay --once      # print once and exit
+    python -m live.quali.watch 2026 Austin quali
+    python -m live.quali.watch 2026 Austin replay --once      # print once and exit
 """
 import pandas as pd
 from f1live.watch import BOLD, RESET, bar, fmt, main, table

@@ -1,8 +1,8 @@
 """Live view of race model predictions: shows the latest batch of rows, whatever columns the model returns.
 
 Usage (from the repo root, in a second terminal next to ./run_session.sh):
-    python -m race.watch 2026 Singapore race
-    python -m race.watch 2026 Singapore replay --once      # print once and exit
+    python -m live.race.watch 2026 Singapore race
+    python -m live.race.watch 2026 Singapore replay --once      # print once and exit
 """
 from f1live.watch import BOLD, RESET, main, table
 

@@ -1,6 +1,6 @@
 """Predict who takes pole: Monte Carlo over the laps still to come in the part (normally Q3).
 
-Same ingredients as the cutoff model (quali.state): each driver's best valid lap, which drivers still have a
+Same ingredients as the cutoff model (live.quali.state): each driver's best valid lap, which drivers still have a
 lap to come (and with what probability p_run they run). Each simulation draws the laps still to come and
 records who ends up fastest.
 
@@ -11,11 +11,11 @@ A driver who runs gets a new lap  center + sigma * N(0, 1), kept only if faster 
                                   estimate: a slow first lap doesn't mean a slow second one)
          = pace                   for drivers without a time yet
   both fall back to best - mu / the field's median best when there is no previous part
-  sigma  = max(first->second spread from quali.state, robust spread of  best - previous best - shift)
+  sigma  = max(first->second spread from live.quali.state, robust spread of  best - previous best - shift)
 The second term matters: the first has few samples and only counts drivers that already ran twice.
 
 Usage (from the repo root):
-    python -m quali.predict_pole 2026 Austin quali [--part 3] [--as-of 2026-10-24T21:55:00Z]
+    python -m live.quali.predict_pole 2026 Austin quali [--part 3] [--as-of 2026-10-24T21:55:00Z]
 """
 import argparse
 
@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 from f1live.events import load
 from f1live.paths import add_session_args, session_from_args
-from quali.state import session_state
+from live.quali.state import session_state
 
 N_PARAM_PAIRS = 3     # drivers needed with a time in both parts before the part-to-part change is trusted
 

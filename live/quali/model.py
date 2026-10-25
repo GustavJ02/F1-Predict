@@ -1,10 +1,10 @@
 """Qualifying model for the runner: Q1/Q2 predict where the cutoff will end up, Q3 who takes pole.
 
-Use it with:  MODEL=quali.model ./run_session.sh 2026 Austin quali
+Use it with:  MODEL=live.quali.model ./run_session.sh 2026 Austin quali
 """
 import pandas as pd
-from quali.predict_elimination import predict as predict_cutoff
-from quali.predict_pole import predict as predict_pole
+from live.quali.predict_elimination import predict as predict_cutoff
+from live.quali.predict_pole import predict as predict_pole
 
 
 def predict(state, history, info):

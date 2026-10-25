@@ -1,9 +1,9 @@
 """Watch events.csv, keep a clean per-driver state table, and call your model on every update.
 
 Usage (from the repo root):
-    python -m f1live.runner 2026 Austin race            # events.csv -> race/model.py -> predictions.csv
+    python -m f1live.runner 2026 Austin race            # events.csv -> live/race/model.py -> predictions.csv
     python -m f1live.runner 2026 Austin race --tick 5   # also re-run every 5 s between rows
-    python -m f1live.runner 2026 Austin quali --model quali.my_model
+    python -m f1live.runner 2026 Austin quali --model live.quali.my_model
 
 Your model is a module with one function:
 
@@ -63,7 +63,7 @@ class ModelLoader:
 def main():
     ap = argparse.ArgumentParser()
     add_session_args(ap)
-    ap.add_argument("--model", default="race.model", help="dotted module name of your model (race/model.py)")
+    ap.add_argument("--model", default="live.race.model", help="dotted module name of your model (live/race/model.py)")
     ap.add_argument("--tick", type=float, default=0, help="also call the model every N s (0 = only on new rows)")
     ap.add_argument("--poll", type=float, default=0.5)
     args = ap.parse_args()

@@ -1,7 +1,7 @@
 """Predict the Q1/Q2 cutoff time and P1 time from events.csv.
 
 Usage (from the repo root):
-    python -m quali.predict_elimination 2026 Austin quali [--part 2] [--as-of 2026-10-24T21:33:00Z]
+    python -m live.quali.predict_elimination 2026 Austin quali [--part 2] [--as-of 2026-10-24T21:33:00Z]
 """
 import argparse
 
@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from f1live.events import load as load_and_prepare
 from f1live.paths import add_session_args, session_from_args
-from quali.state import session_state
+from live.quali.state import session_state
 
 
 def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, seed=0):

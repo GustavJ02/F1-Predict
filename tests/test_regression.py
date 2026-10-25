@@ -6,8 +6,8 @@ from f1live.events import prepare
 from f1live.feed import follow
 from f1live.parse import FIELDS, Parser
 from f1live.paths import Session
-from quali.predict_elimination import predict
-from quali.predict_pole import predict as predict_pole
+from live.quali.predict_elimination import predict
+from live.quali.predict_pole import predict as predict_pole
 
 RAW = Session("2026", "Austin", "quali").raw
 AS_OF = "2026-10-24T21:40:28.476Z"

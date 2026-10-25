@@ -3,7 +3,7 @@
 # Everything lives in data/<year>/<race>/<session>/ (raw.txt, events.csv, predictions.csv).
 # Usage:  ./run_session.sh 2026 Austin race            (live session, needs F1TV login for the recorder)
 #         REPLAY=2026/Austin/quali SPEED=10 ./run_session.sh 2026 Austin replay   (test with a recording)
-# Env:    MODEL=quali.my_model (default race.model)  SNAPSHOT=5  TICK=5
+# Env:    MODEL=live.quali.my_model (default live.race.model)  SNAPSHOT=5  TICK=5
 set -u
 cd "$(dirname "$0")"
 [[ $# -eq 3 ]] || { sed -n '2,6p' "$0"; exit 1; }
@@ -12,7 +12,7 @@ DIR=data/$YEAR/$RACE/$SESSION
 RAW=$DIR/raw.txt
 SNAPSHOT=${SNAPSHOT:-5}
 TICK=${TICK:-5}
-MODEL=${MODEL:-race.model}
+MODEL=${MODEL:-live.race.model}
 if [[ -n "${REPLAY:-}" && ! -f "data/$REPLAY/raw.txt" ]]; then
   echo "REPLAY source data/$REPLAY/raw.txt does not exist" >&2; exit 1
 fi

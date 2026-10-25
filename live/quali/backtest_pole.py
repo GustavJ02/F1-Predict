@@ -1,11 +1,11 @@
-"""Backtest quali.predict_pole on recorded sessions: how often does the driver it favours get pole?
+"""Backtest live.quali.predict_pole on recorded sessions: how often does the driver it favours get pole?
 
 For every session, predict every `--step` seconds from the start of Q3 until the last Q3 lap and score the
 probabilities against who actually took pole (best valid Q3 lap).
 
 Usage (from the repo root):
-    python -m quali.backtest_pole 2026                 # every data/2026/*/quali
-    python -m quali.backtest_pole 2026 --step 15 --csv backtest.csv
+    python -m live.quali.backtest_pole 2026                 # every data/2026/*/quali
+    python -m live.quali.backtest_pole 2026 --step 15 --csv backtest.csv
 """
 import argparse
 import warnings
@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 from f1live.events import load
 from f1live.paths import DATA
-from quali.predict_pole import predict
-from quali.state import session_state
+from live.quali.predict_pole import predict
+from live.quali.state import session_state
 
 CLOCK_BINS = [-1, 0, 60, 180, 420, 10_000]
 CLOCK_LABELS = ['0s (last runs)', '0-60s', '60-180s', '180-420s', '>420s']

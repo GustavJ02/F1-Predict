@@ -1,6 +1,6 @@
 """Terminal viewer for a session's predictions.csv: redraws in place whenever the file changes.
 
-Not run directly: quali.watch and race.watch call `main(render)` with a function that turns the predictions
+Not run directly: live.quali.watch and live.race.watch call `main(render)` with a function that turns the predictions
 DataFrame into lines of text.
 """
 import argparse, os, shutil, sys, time
