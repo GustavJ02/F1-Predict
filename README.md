@@ -43,6 +43,8 @@ play/                strategy playground: try tyre strategies and tweaks, and co
   scenario.py        a race to experiment on (pre-race from the grid, or live from the current state) and paired comparisons
   playground.py      try your own strategies / tweaks for drivers (CLI)
   optimize.py        search for the best strategy of a driver, with pit windows (CLI)
+  field.py           every driver on his best strategy at once (best responses until the plans settle), and the finish that gives
+  backtest_field.py  does that predict races better than the usual stop plans? (no, see below)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
 data/                gitignored
   <year>/<race>/<session>/
@@ -278,6 +280,29 @@ needs 1 SOFT set, 0 available -> 0.18 points lost"). In Austin 2026 ANT has no f
 allocation, `--allow-used S1` counts that many used sets as fresh (optimistic: how worn a used set is isn't known and the simulation
 starts every stint on a fresh tyre), `--tyres none` switches the limit off. The playground flags a plan the driver has no tyres for.
 The other cars' usual stop plans (the "as predicted" baseline) don't respect their tyre sets.
+
+**The whole field on its best strategies** (`play/field.py`). `optimize` finds the best plan for one driver while the others keep
+the usual plans; `play.field` gives every driver one: going down the order, each driver's best plan is searched given the plans
+the others have by then, and the round is repeated until nobody gains more than a small tolerance (an equilibrium of the
+simulation: a plan that works when the others do something else is worth less once they all do it). Then the race is simulated
+with everybody on his plan, against the usual plans. In a race under way the search starts from what each car is doing (compound,
+tyre age, lap, the sets it has left), so it can be repeated as the race changes: about 30 s for 21 cars at lap 31 with 16 processes.
+
+```bash
+python -m play.field pre 2026 Austin                                  # before the race
+python -m play.field live 2026 Austin race --loop --every 3 --jobs 4  # during it: refresh strategy.csv every 3 laps
+python -m live.race.watch 2026 Austin race                            # press s to switch the projection to those plans
+```
+
+With `--loop` the plans are recomputed every few laps from the plans it had (warm start) and written to
+`data/<year>/<race>/<session>/strategy.csv`; the dashboard (key `s`, or `--view optimal`) then shows the finish if everyone
+follows his best plan, with each driver's plan and next stop (and, with a viewer delay, the search that had finished by then).
+`--jobs` defaults to 4 because it shares the machine with the recording. **This is a scenario, not a forecast.** Backtested on the
+16 finished 2026 races at half distance (`python -m play.backtest_field`), projecting with everybody on his optimal plan is no
+more accurate than the usual stop plans (rank correlation 0.884 vs 0.881, rank error 1.59 vs 1.62 places, winner right 62% vs 50%
+but podium Brier 0.044 vs 0.043 and points Brier 0.096 vs 0.089) and more extreme (the winner's chance swings from 0.49 to 0.98 in
+one race, from 0.20 to 0.05 in another): teams are not optimal, the model's tyre and passing assumptions are only approximate, and
+the usual plans are drawn from what teams really did. So the projection panel stays on the usual plans.
 
 Read the results with these limits in mind: the other cars don't react to your plan (a rival would cover an undercut), the plan is
 followed exactly, the numbers are only as good as the pace, tyre and passing assumptions in `live/race/priors.json`, and chances

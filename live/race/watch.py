@@ -9,6 +9,10 @@ gaps, battles, projection and the lap position line), and the keys ] [ (1 s) and
 nudge it until the screen matches the picture; 0 goes back to live. The delay is remembered for next time. The runner and the
 recording are not delayed: only what is shown.
 
+Press `s` to swap the projection for the finish if every driver follows the strategy the model finds best for him, which needs
+`python -m play.field live YEAR RACE SESSION --loop` running in another terminal (it writes strategy.csv). It is a scenario,
+not a forecast: in the backtest it was no more accurate than the projection with the usual stop plans.
+
 Reads events.csv (standings, gaps, tyres), predictions.csv (from live.race.model) and, if f1live.telemetry is
 running, telemetry.csv (where each car is on track) of the session. The screen redraws whenever a file changes;
 Ctrl-C quits.
@@ -204,6 +208,28 @@ def projection_panel(preds, history=None, max_rows=22):
     return Group(Text(note, style="dim"), t)
 
 
+def strategy_panel(strategy, max_rows=22):
+    """The projected finish with every driver on the model's best plan (strategy.csv from `python -m play.field live ... --loop`):
+    rank, current position, plan, next stop, win / podium chances and expected points. A scenario, not the forecast."""
+    if strategy is None or strategy.empty:
+        return Text("no strategy.csv yet. Start it in another terminal:\n  python -m play.field live YEAR RACE SESSION --loop",
+                    style="dim")
+    s = strategy.sort_values("best_pos").head(max_rows)
+    t = Table(box=None, pad_edge=False, header_style="bold dim", expand=True)
+    for name, just in (("#", "right"), ("DRV", "left"), ("NOW", "right"), ("PLAN", "left"), ("NEXT", "left"), ("WIN%", "right"),
+                       ("PODIUM%", "right"), ("PTS", "right")):
+        t.add_column(name, justify=just, no_wrap=True)
+    for i, (_, r) in enumerate(s.iterrows(), 1):
+        tyre = TYRE.get(r["next_compound"]) if isinstance(r["next_compound"], str) else None
+        nxt = Text(f"L{int(r['next_lap'])} {tyre[0]}", style=tyre[1]) if tyre and pd.notna(r["next_lap"]) else Text("no stop", style="dim")
+        t.add_row(str(i), Text(str(r["tla"]), style="bold"), str(int(r["now"])), str(r["plan"]), nxt,
+                  Text(pct(r["best_win"]), style=prob_style(r["best_win"])), Text(pct(r["best_podium"]), style=prob_style(r["best_podium"])),
+                  f"{r['best_pts']:.1f}")
+    first = s.iloc[0]
+    note = f"as of lap {int(first['race_lap'])}: every car on the plan the model finds best for it"
+    return Group(Text(note, style="dim"), t)
+
+
 def header(history, preds, sess, delay=0.0):
     lap = history[history["race_lap"].notna()].tail(1)
     race_lap = int(lap["race_lap"].iloc[0]) if len(lap) else None
@@ -322,6 +348,7 @@ class Feed:
         self.buffer = []                  # telemetry kept only until the reference lap exists
         self.pos = {}                     # driver -> (ts, x, y)
         self.trail = {}                   # driver -> [(ts, x, y), ...] the last TRAIL_S seconds, to show the race as it was
+        self.strategy, self._strategy_stamp = None, None      # strategy.csv from play.field --loop
         self.tracker = None
         self.corners = load_corners(sess.dir.parent / "corners.csv")
         ref = load_reference(sess.dir.parent / "track.csv")
@@ -335,6 +362,7 @@ class Feed:
             self.history = None
         elif new is not None:
             self.history = new if self.history is None else pd.concat([self.history, new], ignore_index=True)
+        self.poll_strategy()
         fresh = self.tel.read()
         if isinstance(fresh, str):
             self.pos, self.trail, self.buffer = {}, {}, []
@@ -362,6 +390,20 @@ class Feed:
         """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""
         h = self.history if history is None else history
         return None if h is None else sector_fractions(h)
+
+    def poll_strategy(self):
+        path = self.sess.dir / "strategy.csv"
+        try:
+            stamp = os.stat(path).st_mtime_ns
+        except FileNotFoundError:
+            return
+        if stamp != self._strategy_stamp:
+            try:
+                df = pd.read_csv(path)
+                df["ts"] = pd.to_datetime(df["ts"], format="ISO8601")
+                self.strategy, self._strategy_stamp = df, stamp
+            except (pd.errors.EmptyDataError, ValueError, KeyError):
+                pass                                          # caught mid-write: try again next time
 
     def head(self):
         """The newest moment we have data for (event time), or None."""
@@ -408,17 +450,23 @@ def prepare_telemetry(df):
     return df
 
 
-def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0):
+def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0, strategy=None,
+           view="usual"):
     """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
     progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line, with its corners and
     sector boundaries (Feed.corners, Feed.sectors()). delay (seconds) is only shown in the header: the caller passes the
-    history, predictions and progress as they were that long ago (see delayed_view).
+    history, predictions and progress as they were that long ago (see delayed_view). view="optimal" replaces the projection
+    with the finish if every car follows its best strategy (`strategy`, from strategy.csv).
     A wide screen gets three columns (standings | projected finish | battles); otherwise the right column is split."""
     layout = Layout()
     layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 4))
     ok = history is not None and len(history)
-    proj_panel = Panel(projection_panel(preds, history), title="Projected finish", title_align="left",
-                       subtitle="Monte Carlo of the rest of the race", subtitle_align="left")
+    if view == "optimal":
+        proj_panel = Panel(strategy_panel(strategy), title="Projected finish: everyone on his best strategy", title_align="left",
+                           subtitle=Text("a scenario, not a forecast · [s] projection"), subtitle_align="left")
+    else:
+        proj_panel = Panel(projection_panel(preds, history), title="Projected finish", title_align="left",
+                           subtitle=Text("Monte Carlo · [s] best strategies"), subtitle_align="left")
     battle_panel = Panel(battles_panel(preds, max_lines=max(height - 6 if width >= 150 else (height - 14) // 2, 8)),
                          title="Battles (pace-based)", title_align="left",
                          subtitle=f"within {THRESH:.0f} s, next {HORIZON} laps", subtitle_align="left")
@@ -444,15 +492,19 @@ def delayed_view(feed, preds, delay):
     that moment. -> dict(at, history, preds, progress, sectors); history is None until there is data that old."""
     head = feed.head()
     if head is None or feed.history is None:
-        return dict(at=None, history=None, preds=preds, progress=({}, None), sectors=None)
+        return dict(at=None, history=None, preds=preds, progress=({}, None), sectors=None, strategy=None)
     at = head - pd.Timedelta(float(delay), unit="s")
     hist = feed.history[feed.history["ts"] <= at] if delay else feed.history
     if hist.empty:
-        return dict(at=at, history=None, preds=None, progress=({}, None), sectors=None)
+        return dict(at=at, history=None, preds=None, progress=({}, None), sectors=None, strategy=None)
     if preds is not None and delay:
         preds = preds[preds["ts"] <= at]
         preds = preds if len(preds) else None
-    return dict(at=at, history=hist, preds=preds, progress=feed.progress(hist, at), sectors=feed.sectors(hist))
+    strategy = feed.strategy
+    if strategy is not None:                          # the latest search that had finished by then
+        strategy = strategy[strategy["ts"] <= at]
+        strategy = strategy[strategy["ts"] == strategy["ts"].max()] if len(strategy) else None
+    return dict(at=at, history=hist, preds=preds, progress=feed.progress(hist, at), sectors=feed.sectors(hist), strategy=strategy)
 
 
 STEPS = {"]": 1.0, "[": -1.0, "}": 10.0, "{": -10.0}
@@ -519,16 +571,22 @@ def main():
     ap.add_argument("--delay", type=float, help="show the race as it was this many seconds ago, to match a delayed broadcast "
                                                  "(default: what you used last time)")
     ap.add_argument("--once", action="store_true", help="print one frame and exit")
+    ap.add_argument("--view", choices=["usual", "optimal"], default="usual",
+                    help="start with the projection (usual) or the finish with every driver on his best strategy (optimal); "
+                         "the key s switches")
     args = ap.parse_args()
     sess = session_from_args(args)
     feed = Feed(sess)
     delay = min(max(args.delay, 0.0), float(Feed.TRAIL_S)) if args.delay is not None else load_delay(sess.data_dir)
 
+    view = args.view
+
     def frame(height, width, preds_all):
         v = delayed_view(feed, preds_all, delay)
         if v["history"] is None:
             return Text(f" {sess}: no data from {delay:g} s ago yet" if delay else f" {sess}: waiting for events.csv ...")
-        return render(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay)
+        return render(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay,
+                      v["strategy"], view)
 
     if args.once or not sys.stdout.isatty():
         feed.poll()
@@ -544,6 +602,10 @@ def main():
             while True:
                 feed.poll()
                 for key in keys.read(args.interval):
+                    if key in "sS":
+                        view = "optimal" if view == "usual" else "usual"
+                        drawn_delay = None                          # redraw now
+                        continue
                     new = adjust_delay(delay, key)
                     if new != delay:
                         delay = new

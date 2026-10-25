@@ -116,15 +116,16 @@ def _score_in_worker(args):
 
 class Search:
     """Evaluates plans for one driver in one scenario, remembering results."""
-    def __init__(self, scenario, driver, objective, opt, sc_react=False):
+    def __init__(self, scenario, driver, objective, opt, sc_react=False, fixed=None):
         self.sc, self.driver, self.objective, self.opt, self.sc_react = scenario, driver, objective, opt, sc_react
+        self.fixed = dict(fixed or {})              # plans the other cars follow (the rest use the usual stop plans)
         self.cache = {}
 
     def score(self, plan, sims=None, keep=False):
         key = (str(plan), sims)
         if key not in self.cache:
             sc = self.sc if sims is None else _with_sims(self.sc, sims)
-            res = sc.run(plans={self.driver: plan}, sc_react=self.sc_react, **self.opt)
+            res = sc.run(plans={**self.fixed, self.driver: plan}, sc_react=self.sc_react, **self.opt)
             self.cache[key] = (objective_value(res.column(self.driver), self.objective), res if keep else None)
         return self.cache[key][0]
 
@@ -151,10 +152,31 @@ def _with_sims(scenario, sims):
     return clone
 
 
+def candidate_plans(scenario, driver, stops=(1, 2), step=None, min_stint=None, min_survival=0.1):
+    """All the strategies worth simulating for a driver: every legal compound sequence with the given numbers of stops over a
+    grid of stop laps, minus plans with a stint the tyre has never lasted. -> (plans, stops): `stops` gains 0 for a car in a race
+    under way that is already legal (it may simply stay out). Tyre sets are not applied here: see TyreSets.check."""
+    live = scenario.done > 0
+    row = scenario.cars.set_index("tla").loc[driver]
+    first = COMPOUNDS[int(row["comp"])] if live else None
+    legal_any = live and not bool(row["needs_stop"])
+    lo, hi = scenario.done + 1, scenario.total - 1
+    min_stint = min_stint or max(MIN_STINT, 5)
+    if legal_any and 0 not in stops:
+        stops = (0,) + tuple(stops)
+    plans = []
+    for n in stops:
+        step_n = step or (2 if n == 1 else 5)
+        grids = lap_grids(n, lo, hi, step_n, min_stint if not live else 3)
+        for seq in sequences(n, first, must_change=not legal_any):
+            plans += [Plan(seq, laps) for laps in grids]
+    return [p for p in plans if plan_survival(scenario, driver, p) >= min_survival], stops
+
+
 def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_stint=None, top=8, search_sims=400,
              final_sims=3000, refine=5, opt=None, sc_react=False, verbose=True, tolerance=None, min_survival=0.1,
-             jobs=None, tyres="auto"):
-    """-> (DataFrame of the best strategies, info dict). See the module docstring.
+             jobs=None, tyres="auto", fixed=None):
+    """-> (DataFrame of the best strategies, info dict). See the module docstring. `fixed` = {tla: Plan} the other cars follow.
 
     tyres: the sets each driver has left (play.tyres.TyreSets); "auto" = the scenario's own, None = no limits. Only plans that
     fit the driver's sets are ranked. If the limits keep out a better plan, info['unrestricted'] says which and what it was
@@ -169,21 +191,13 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
     lo, hi = scenario.done + 1, scenario.total - 1
     min_stint = min_stint or max(MIN_STINT, 5)
     tolerance = TOLERANCE[objective] if tolerance is None else tolerance
-    search = Search(scenario, driver, objective, opt or {}, sc_react)
+    search = Search(scenario, driver, objective, opt or {}, sc_react, fixed)
     t0 = time.time()
 
     def fits(plan):
         return tyres is None or not tyres.check(driver, plan)
 
-    if legal_any and 0 not in stops:
-        stops = (0,) + tuple(stops)                          # a car that is already legal may simply stay out
-    plans = []
-    for n in stops:
-        step_n = step or (2 if n == 1 else 5)
-        grids = lap_grids(n, lo, hi, step_n, min_stint if not live else 3)
-        for seq in sequences(n, first, must_change=not legal_any):
-            plans += [Plan(seq, laps) for laps in grids]
-    plans = [p for p in plans if plan_survival(scenario, driver, p) >= min_survival]   # stints longer than tyres ever last
+    plans, stops = candidate_plans(scenario, driver, stops, step, min_stint, min_survival)
     if not any(fits(p) for p in plans):
         raise ValueError(f"{driver} has no strategy that fits the tyres left ({tyres.describe(driver)}): "
                          "try --allow-used or --sets to say what he really has")
@@ -236,10 +250,10 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
     if verbose:
         print(f"re-simulating the {len(finalists)} best with {final_sims} runs ...", flush=True)
     sc_final = _with_sims(scenario, final_sims) if final_sims != scenario.sims else scenario
-    base = sc_final.run(sc_react=sc_react, **(opt or {}))
+    base = sc_final.run(plans=dict(fixed or {}), sc_react=sc_react, **(opt or {}))
     rows = []
     for plan in finalists:
-        res = sc_final.run(plans={driver: plan}, sc_react=sc_react, **(opt or {}))
+        res = sc_final.run(plans={**(fixed or {}), driver: plan}, sc_react=sc_react, **(opt or {}))
         c = compare(base, res, [driver]).iloc[0]
         st = res.stats(driver)
         rows.append(dict(strategy=str(plan), stops=len(plan.laps), life=plan_survival(scenario, driver, plan),
@@ -251,7 +265,7 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
     table = full.head(top).reset_index(drop=True)
     by_stops = full.groupby("stops").head(1).sort_values("stops").reset_index(drop=True)
     best_plan = table.loc[0, "plan"]
-    windows = pit_windows(sc_final, driver, best_plan, objective, tolerance, opt or {}, sc_react, jobs=jobs)
+    windows = pit_windows(sc_final, driver, best_plan, objective, tolerance, opt or {}, sc_react, jobs=jobs, fixed=fixed)
     info = dict(baseline=base.stats(driver), windows=windows, by_stops=by_stops, tolerance=tolerance, seconds=time.time() - t0,
                 scenario=scenario.label, objective=objective,
                 tyres=None if tyres is None else tyres.describe(driver), unrestricted=None)
@@ -263,10 +277,10 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
     return table, info
 
 
-def pit_windows(scenario, driver, plan, objective, tolerance, opt=None, sc_react=False, span=8, jobs=1):
+def pit_windows(scenario, driver, plan, objective, tolerance, opt=None, sc_react=False, span=8, jobs=1, fixed=None):
     """For each stop of `plan`: (lap of the stop, first lap, last lap) of the range whose result is within `tolerance` of the
     best, moving only that stop and keeping the others where they are."""
-    search = Search(scenario, driver, objective, opt or {}, sc_react)
+    search = Search(scenario, driver, objective, opt or {}, sc_react, fixed)
     out = []
     for i, lap in enumerate(plan.laps):
         cands = {}
