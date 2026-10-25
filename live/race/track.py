@@ -90,6 +90,16 @@ class TrackProgress:
         return i / n
 
 
+def nearest_progress(ref, x, y, chunk=2000):
+    """Lap fraction of the reference point nearest each (x, y); arrays in, array out. Stateless, unlike TrackProgress.progress."""
+    ref, x, y = np.asarray(ref, float), np.asarray(x, float), np.asarray(y, float)
+    out = np.empty(len(x))
+    for i in range(0, len(x), chunk):
+        d = np.hypot(ref[None, :, 0] - x[i:i + chunk, None], ref[None, :, 1] - y[i:i + chunk, None])
+        out[i:i + chunk] = d.argmin(axis=1) / len(ref)
+    return out
+
+
 def timing_progress(lat, now, pace):
     """Fallback: {driver: progress} = time since the last lap crossing / pace (or last lap time), clipped to [0, 1)."""
     out = {}

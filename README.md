@@ -91,6 +91,14 @@ Panels (a wide screen shows three columns, a narrower one stacks the last two):
   `python -m live.race.track 2026 Austin quali` writes from any session's telemetry (so it can be ready before the race;
   sync it with `--what track`). Without telemetry the positions are estimated from lap timing and the panel says so.
 
+**Stopped and slow cars, safety car banner.** A car standing still on the track (speed at most 5 km/h for 3 s after it was
+racing, not in the pit lane) gets a red `✖` and a blinking label on the lap-position line and is named above it; a car
+crawling at under 45% of the speed cars normally have at that spot (learned from this race's green-flag running, so slow corners
+and the pit limiter don't count) gets a yellow `▼`. Crawling is only judged under green flags, and nothing is flagged on lap 1,
+under a red flag or after the chequered flag. A blinking banner above the line says SAFETY CAR, VIRTUAL SAFETY CAR, VSC ENDING or
+RED FLAG. On the 2026 US GP the detector flags only BOT: crawling from 90 s and stopped 4 s before the VSC was announced, with no false alarms from the other 19 cars
+(`live/race/hazards.py`; thresholds at the top of that file). It follows the viewer delay like everything else.
+
 **Matching a delayed broadcast.** A TV picture is usually some seconds behind the live timing, so the lap-position line (and the
 standings and gaps) run ahead of what you see. `python -m live.race.watch 2026 Austin race --delay 45` shows the race as it was 45 s
 ago (standings, gaps, battles, projection and the lap position line, which uses the recorded car positions of that moment). While it

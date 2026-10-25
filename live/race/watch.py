@@ -38,9 +38,10 @@ from f1live.paths import add_session_args, session_from_args
 from f1live.tail import CsvTail
 from f1live.watch import read
 from live.race.battles import HORIZON, THRESH, latest
+from live.race.hazards import BANNERS, SpeedProfile, hazards, neutral_at, track_state
 from live.race.pace import driver_pace
-from live.race.track import (TrackProgress, build_reference, load_corners, load_reference, sector_fractions,
-                             timing_progress)
+from live.race.track import (TrackProgress, build_reference, load_corners, load_reference, nearest_progress,
+                             sector_fractions, timing_progress)
 from live.race.weather import wet_now
 
 TYRE = {"SOFT": ("S", "red"), "MEDIUM": ("M", "yellow"), "HARD": ("H", "white"), "INTERMEDIATE": ("I", "green"),
@@ -261,11 +262,15 @@ class TrackLine:
     """One line for the lap (start/finish at both ends) with a dot per car and its code above, staggered over
     TRACK_ROWS rows so cars close together stay readable (a label that can't be placed is dropped, its dot stays).
     The line is coloured by sector (sectors: the lap fractions where S1 and S2 end) and corners (corners:
-    [(number, fraction)]) are numbered under it, as many as fit."""
-    def __init__(self, cars, corners=(), sectors=None):
-        self.cars = cars            # [(code, progress 0-1, style, is_leader)]
+    [(number, fraction)]) are numbered under it, as many as fit.
+    A car with a flag ('stopped' or 'slow', from live.race.hazards) gets ✖ / ▼ instead of its dot and a red / yellow label,
+    which blinks while `flash` is set; flagged cars are labelled first so a crowd never hides them."""
+    def __init__(self, cars, corners=(), sectors=None, flash=False):
+        # [(code, progress 0-1, style, is_leader[, flag])], flag None | 'stopped' | 'slow'
+        self.cars = [c if len(c) == 5 else (*c, None) for c in cars]
         self.corners = corners
         self.sectors = sectors
+        self.flash = flash
 
     def __rich_console__(self, console, options):
         W = max(options.max_width, 20)
@@ -293,22 +298,28 @@ class TrackLine:
                 free = x + len(label) + 1
         row_end = [-2] * TRACK_ROWS
         placed = []
-        for code, frac, style, leader in sorted(self.cars, key=lambda c: c[1]):
+        for code, frac, style, leader, flag in sorted(self.cars, key=lambda c: (c[4] is None, c[1])):
             x = min(int(frac * (W - 1)), W - 1)
             lx = min(x, W - len(code))
             r = next((r for r in range(TRACK_ROWS) if lx > row_end[r]), None)
             if r is not None:
                 row_end[r] = lx + len(code)
-            placed.append((code, x, lx, r, style, leader))
-        for code, x, lx, r, style, leader in placed:               # stems first, labels and dots over them
+            placed.append((code, x, lx, r, style, leader, flag))
+        for code, x, lx, r, style, leader, flag in placed:         # stems first, labels and dots over them
             for rr in range(0 if r is None else 0, 0 if r is None else r):
                 if grid[line - 1 - rr][x][0] == " ":
                     grid[line - 1 - rr][x] = ("│", "dim")
-        for code, x, lx, r, style, leader in placed:
-            grid[line][x] = ("◆" if leader else "●", f"bold {style}" if style else "bold")
+        for code, x, lx, r, style, leader, flag in placed:
+            mark = "◆" if leader else "●"
+            label = f"bold {style}" if style else "bold"
+            if flag == "stopped":
+                mark, label = "✖", "bold white on red" if self.flash else "bold red"
+            elif flag == "slow":
+                mark, label = "▼", "bold black on yellow" if self.flash else "bold yellow"
+            grid[line][x] = (mark, label if flag else (f"bold {style}" if style else "bold"))
             if r is not None:
                 for k, ch in enumerate(code):
-                    grid[line - 1 - r][lx + k] = (ch, f"bold {style}" if style else "bold")
+                    grid[line - 1 - r][lx + k] = (ch, label)
         for row in grid:
             t = Text()
             for ch, st in row:
@@ -325,16 +336,37 @@ def sector_legend(sectors):
     return t
 
 
-def track_cars(history, progress):
-    """[(code, progress, colour, is_leader)] for the cars still running that have a progress."""
+def track_cars(history, progress, flags=None):
+    """[(code, progress, colour, is_leader, flag)] for the cars still running that have a progress. flags: {driver: 'stopped' |
+    'slow'} (live.race.hazards); a car stopped on the track stays on the line even if it has been marked out."""
     lat = latest(history)
+    flags = flags or {}
     cars = []
     for drv, frac in progress.items():
-        if drv not in lat.index or lat.loc[drv, "out"]:
+        if drv not in lat.index or (lat.loc[drv, "out"] and flags.get(drv) != "stopped"):
             continue
         r = lat.loc[drv]
-        cars.append((str(r["tla"]), frac, TEAM_COLOUR.get(r.get("team"), "white"), r["position"] == 1))
+        cars.append((str(r["tla"]), frac, TEAM_COLOUR.get(r.get("team"), "white"), r["position"] == 1, flags.get(drv)))
     return cars
+
+
+def alert_line(history, flags, flash=False):
+    """The line above the lap position: a blinking banner for a safety car / VSC / red flag, then who has stopped or crawls."""
+    t = Text(no_wrap=True, overflow="ellipsis")
+    state = BANNERS.get(track_state(history))
+    if state:
+        red = state == "RED FLAG"
+        on, off = ("bold white on red", "bold red") if red else ("bold black on yellow", "bold yellow")
+        t.append(f" ⚠ {state} ⚠ ", style=on if flash else off)
+    lat = latest(history) if history is not None and len(history) else None
+    names = {kind: [] for kind in ("stopped", "slow")}
+    for drv, kind in (flags or {}).items():
+        names[kind].append(str(lat.loc[drv, "tla"]) if lat is not None and drv in lat.index else drv)
+    for kind, mark, label, on, off in (("stopped", "✖", "stopped on track", "bold red", "red"),
+                                       ("slow", "▼", "slow on track", "bold yellow", "yellow")):
+        if names[kind]:
+            t.append(f"  {mark} {' '.join(sorted(names[kind]))} {label}", style=on if flash else off)
+    return t
 
 
 class Feed:
@@ -349,8 +381,9 @@ class Feed:
         self.tel = CsvTail(sess.telemetry, prepare_telemetry)
         self.history = None
         self.buffer = []                  # telemetry kept only until the reference lap exists
-        self.pos = {}                     # driver -> (ts, x, y)
-        self.trail = {}                   # driver -> [(ts, x, y), ...] the last TRAIL_S seconds, to show the race as it was
+        self.pos = {}                     # driver -> (ts, x, y, speed)
+        self.trail = {}                   # driver -> [(ts, x, y, speed), ...] the last TRAIL_S seconds, to show the race as it was
+        self.profile = SpeedProfile()     # what speed is normal where on the lap, to spot a car crawling (live.race.hazards)
         self.strategy, self._strategy_stamp = None, None      # strategy.csv from play.field --loop
         self.tracker = None
         self.corners = load_corners(sess.dir.parent / "corners.csv")
@@ -372,9 +405,10 @@ class Feed:
         elif fresh is not None:
             ok = fresh.dropna(subset=["x", "y"])
             for drv, r in ok.groupby("driver").tail(1).set_index("driver").iterrows():
-                self.pos[drv] = (r["ts"], r["x"], r["y"])
+                self.pos[drv] = (r["ts"], r["x"], r["y"], r["speed"])
             for drv, g in ok.groupby("driver"):
-                self.trail.setdefault(drv, []).extend(zip(g["ts"], g["x"], g["y"]))
+                self.trail.setdefault(drv, []).extend(zip(g["ts"], g["x"], g["y"], g["speed"]))
+            self._learn_speeds(ok)
             newest = ok["ts"].max() if len(ok) else None
             if newest is not None:
                 cutoff = newest - pd.Timedelta(self.TRAIL_S, unit="s")
@@ -388,6 +422,29 @@ class Feed:
             ref = build_reference(pd.concat(self.buffer, ignore_index=True), self.history)
             if ref is not None:
                 self.tracker, self.buffer = TrackProgress(ref), []
+
+    def _learn_speeds(self, rows):
+        """Teach the speed profile from green-flag running (every second sample is plenty)."""
+        if self.tracker is None or self.history is None:
+            return
+        rows = rows.iloc[::2]
+        rows = rows[rows["speed"] >= 30]
+        if rows.empty:
+            return
+        rows = rows[~neutral_at(self.history, rows["ts"])]
+        if len(rows):
+            for p, v in zip(nearest_progress(self.tracker.ref, rows["x"], rows["y"]), rows["speed"]):
+                self.profile.add(p, v)
+
+    def hazards(self, history, at):
+        """{driver: 'stopped' | 'slow'} as of event time `at` (see live.race.hazards)."""
+        if at is None or history is None:
+            return {}
+        progress_of = None
+        if self.tracker is not None:
+            ref = self.tracker.ref
+            progress_of = lambda x, y: float(nearest_progress(ref, [x], [y])[0])
+        return hazards(self.trail, history, at, progress_of, self.profile)
 
     def sectors(self, history=None):
         """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""
@@ -415,7 +472,7 @@ class Feed:
         return max(stamps) if stamps else None
 
     def position_at(self, driver, at):
-        """(ts, x, y) of the car's last sample at or before `at`, or None."""
+        """(ts, x, y, speed) of the car's last sample at or before `at`, or None."""
         best = None
         for sample in self.trail.get(driver, ()):
             if sample[0] <= at:
@@ -438,7 +495,7 @@ class Feed:
         if self.tracker is not None and positions:
             live = {d: p for d, p in positions.items() if (now - p[0]).total_seconds() <= self.TEL_STALE}
             if live:
-                return {d: self.tracker.progress(d, x, y) for d, (_, x, y) in live.items()}, "telemetry"
+                return {d: self.tracker.progress(d, x, y) for d, (_, x, y, *_) in live.items()}, "telemetry"
         lat = latest(h)
         if lat.empty:
             return {}, None
@@ -450,19 +507,23 @@ class Feed:
 def prepare_telemetry(df):
     df["ts"] = pd.to_datetime(df["ts"], format="ISO8601")
     df["driver"] = df["driver"].astype(int).astype(str)
+    if "speed" not in df:
+        df["speed"] = np.nan
     return df
 
 
 def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0, strategy=None,
-           view="usual"):
+           view="usual", flags=None, flash=False):
     """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
     progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line, with its corners and
     sector boundaries (Feed.corners, Feed.sectors()). delay (seconds) is only shown in the header: the caller passes the
     history, predictions and progress as they were that long ago (see delayed_view). view="optimal" replaces the projection
     with the finish if every car follows its best strategy (`strategy`, from strategy.csv).
+    flags ({driver: 'stopped' | 'slow'}, see delayed_view) are marked on the track line and named, with a safety car / VSC /
+    red flag banner, in a line above it; `flash` is the blink phase (the caller flips it every half second).
     A wide screen gets three columns (standings | projected finish | battles); otherwise the right column is split."""
     layout = Layout()
-    layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 4))
+    layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 5))
     ok = history is not None and len(history)
     if view == "optimal":
         proj_panel = Panel(strategy_panel(strategy), title="Projected finish: everyone on his best strategy", title_align="left",
@@ -482,9 +543,10 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
         layout["right"].split_column(Layout(proj_panel, name="proj", ratio=3), Layout(battle_panel, name="battles", ratio=2))
     layout["head"].update(header(history, preds, sess, delay) if ok else Text(f" {sess}  waiting ... (delay {delay:g} s)"))
     prog, mode = progress or ({}, None)
-    cars = track_cars(history, prog) if ok and prog else []
+    cars = track_cars(history, prog, flags) if ok and prog else []
     note = {"telemetry": "from car telemetry", "timing": "estimated from lap timing"}.get(mode, "waiting for positions")
-    layout["foot"].update(Panel(TrackLine(cars, corners, sectors) if cars else Text("no positions yet", style="dim"),
+    track = TrackLine(cars, corners, sectors, flash) if cars else Text("no positions yet", style="dim")
+    layout["foot"].update(Panel(Group(alert_line(history, flags, flash) if ok else Text(""), track),
                                 title=f"Lap position ({note})", title_align="left",
                                 subtitle=Text.assemble(sector_legend(sectors), "◆ leader"), subtitle_align="right"))
     return layout
@@ -492,14 +554,14 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
 
 def delayed_view(feed, preds, delay):
     """The race as it was `delay` seconds ago, for matching a delayed broadcast: events, predictions and car positions up to
-    that moment. -> dict(at, history, preds, progress, sectors); history is None until there is data that old."""
+    that moment. -> dict(at, history, preds, progress, sectors, strategy, flags); history is None until there is data that old."""
     head = feed.head()
     if head is None or feed.history is None:
-        return dict(at=None, history=None, preds=preds, progress=({}, None), sectors=None, strategy=None)
+        return dict(at=None, history=None, preds=preds, progress=({}, None), sectors=None, strategy=None, flags={})
     at = head - pd.Timedelta(float(delay), unit="s")
     hist = feed.history[feed.history["ts"] <= at] if delay else feed.history
     if hist.empty:
-        return dict(at=at, history=None, preds=None, progress=({}, None), sectors=None, strategy=None)
+        return dict(at=at, history=None, preds=None, progress=({}, None), sectors=None, strategy=None, flags={})
     if preds is not None and delay:
         preds = preds[preds["ts"] <= at]
         preds = preds if len(preds) else None
@@ -507,7 +569,8 @@ def delayed_view(feed, preds, delay):
     if strategy is not None:                          # the latest search that had finished by then
         strategy = strategy[strategy["ts"] <= at]
         strategy = strategy[strategy["ts"] == strategy["ts"].max()] if len(strategy) else None
-    return dict(at=at, history=hist, preds=preds, progress=feed.progress(hist, at), sectors=feed.sectors(hist), strategy=strategy)
+    return dict(at=at, history=hist, preds=preds, progress=feed.progress(hist, at), sectors=feed.sectors(hist), strategy=strategy,
+                flags=feed.hazards(hist, at))
 
 
 def safe_frame(build, last_good, log_path):
@@ -606,13 +669,16 @@ def main():
     delay = min(max(args.delay, 0.0), float(Feed.TRAIL_S)) if args.delay is not None else load_delay(sess.data_dir)
 
     view = args.view
+    flash = lambda: int(time.time() * 2) % 2 == 0           # blink phase for alerts: on for half a second, off for half
+    alerting = [False]                                      # did the last frame have anything blinking?
 
     def frame(height, width, preds_all):
         v = delayed_view(feed, preds_all, delay)
         if v["history"] is None:
             return Text(f" {sess}: no data from {delay:g} s ago yet" if delay else f" {sess}: waiting for events.csv ...")
+        alerting[0] = bool(v["flags"]) or track_state(v["history"]) in BANNERS
         return render(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay,
-                      v["strategy"], view)
+                      v["strategy"], view, v["flags"], flash())
 
     if args.once or not sys.stdout.isatty():
         feed.poll()
@@ -622,7 +688,7 @@ def main():
         return
     console = Console()
     console.set_window_title(window_title(sess, args.title))          # restored by your shell's prompt when you quit
-    stamp, drawn_at, drawn_delay, last_good = None, None, None, None
+    stamp, drawn_at, drawn_delay, drawn_phase, last_good = None, None, None, None, None
     error_log = Path(sess.data_dir) / ".watch_error.log"
     from rich.live import Live
     with Live(console=console, screen=True, auto_refresh=False) as live, Keys() as keys:
@@ -642,8 +708,9 @@ def main():
                             for p in (sess.events, sess.predictions, sess.telemetry))
                 head = feed.head()
                 moved = head is not None and (drawn_at is None or (head - drawn_at).total_seconds() >= 0.5)
-                if now != stamp or moved or delay != drawn_delay or console.size != getattr(live, "_size", None):
-                    stamp, drawn_at, drawn_delay, live._size = now, head, delay, console.size
+                blink = alerting[0] and flash() != drawn_phase
+                if now != stamp or moved or blink or delay != drawn_delay or console.size != getattr(live, "_size", None):
+                    stamp, drawn_at, drawn_delay, drawn_phase, live._size = now, head, delay, flash(), console.size
                     shown, last_good = safe_frame(
                         lambda: frame(console.height, console.width, read(sess.predictions)) if feed.history is not None
                         else Text(f" {sess}: waiting for events.csv ..."), last_good, error_log)
