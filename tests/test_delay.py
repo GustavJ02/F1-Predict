@@ -107,3 +107,22 @@ def frame(delay, tmp_path):
 def test_the_header_shows_the_delay_only_when_there_is_one(tmp_path):
     assert "DELAY 45 s" in frame(45, tmp_path) and "0 live" in frame(45, tmp_path)
     assert "DELAY" not in frame(0, tmp_path)
+
+
+def test_a_drawing_error_shows_a_banner_over_the_last_good_frame_instead_of_ending_the_dashboard(tmp_path):
+    log = tmp_path / ".watch_error.log"
+    good, last = watch.safe_frame(lambda: watch.Text("all fine"), None, log)
+    assert str(good) == "all fine" and last is good and not log.exists()
+
+    def broken():
+        raise AttributeError("'float' object has no attribute 'split'")
+
+    shown, last = watch.safe_frame(broken, good, log)
+    assert last is good                                          # the next good frame will replace it
+    console = Console(width=120, file=io.StringIO(), force_terminal=False, color_system=None)
+    console.print(shown)
+    text = console.file.getvalue()
+    assert "display error: AttributeError" in text and "all fine" in text and str(log) in text
+    assert "AttributeError" in log.read_text() and "Traceback" in log.read_text()
+    shown2, _ = watch.safe_frame(broken, None, tmp_path / "missing" / "x.log")     # even an unwritable log is no reason to die
+    assert shown2 is not None

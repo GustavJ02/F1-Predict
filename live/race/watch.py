@@ -510,6 +510,23 @@ def delayed_view(feed, preds, delay):
     return dict(at=at, history=hist, preds=preds, progress=feed.progress(hist, at), sectors=feed.sectors(hist), strategy=strategy)
 
 
+def safe_frame(build, last_good, log_path):
+    """-> (renderable, last good renderable). If drawing a frame fails, the error is appended to log_path and the last good frame
+    is kept under a red one-line banner: a bug in the display should never take the dashboard down in the middle of a race."""
+    try:
+        frame = build()
+        return frame, frame
+    except Exception as e:                                   # noqa: BLE001 (anything: the point is to keep running)
+        import traceback
+        try:
+            with open(log_path, "a") as f:
+                f.write(f"--- {pd.Timestamp.now(tz='UTC'):%Y-%m-%d %H:%M:%S} UTC\n{traceback.format_exc()}\n")
+        except OSError:
+            pass
+        banner = Text(f" display error: {type(e).__name__}: {e}   (details in {log_path}) ", style="bold white on red")
+        return (Group(banner, last_good) if last_good is not None else banner), last_good
+
+
 STEPS = {"]": 1.0, "[": -1.0, "}": 10.0, "{": -10.0}
 
 
@@ -598,7 +615,8 @@ def main():
                       else Text(f"{sess}: no events yet"))
         return
     console = Console()
-    stamp, drawn_at, drawn_delay = None, None, None
+    stamp, drawn_at, drawn_delay, last_good = None, None, None, None
+    error_log = Path(sess.data_dir) / ".watch_error.log"
     from rich.live import Live
     with Live(console=console, screen=True, auto_refresh=False) as live, Keys() as keys:
         try:
@@ -619,8 +637,10 @@ def main():
                 moved = head is not None and (drawn_at is None or (head - drawn_at).total_seconds() >= 0.5)
                 if now != stamp or moved or delay != drawn_delay or console.size != getattr(live, "_size", None):
                     stamp, drawn_at, drawn_delay, live._size = now, head, delay, console.size
-                    live.update(frame(console.height, console.width, read(sess.predictions)) if feed.history is not None
-                                else Text(f" {sess}: waiting for events.csv ..."), refresh=True)
+                    shown, last_good = safe_frame(
+                        lambda: frame(console.height, console.width, read(sess.predictions)) if feed.history is not None
+                        else Text(f" {sess}: waiting for events.csv ..."), last_good, error_log)
+                    live.update(shown, refresh=True)
         except KeyboardInterrupt:
             pass
 
