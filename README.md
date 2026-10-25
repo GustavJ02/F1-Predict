@@ -10,7 +10,7 @@ record (FastF1)  ->  raw.txt  ->  f1live.parse  ->  events.csv  ->  f1live.runne
   <img src="docs/race-view-live.png" alt="The race dashboard during the 2026 US Grand Prix" width="900">
 </p>
 
-The race dashboard (`python -m live.race.watch`) during the 2026 US Grand Prix, on lap 8 and shown 39 s behind the live timing to
+The race dashboard (`python -m live.race.watch`) during the 2026 US Grand Prix, on lap 43 and shown 40 s behind the live timing to
 match a delayed broadcast. Top left: the live standings with gaps, intervals, tyres and lap times (yellow intervals are within
 1 s). Top right: the projected finish, a Monte Carlo of the rest of the race with each driver's chance of a win, a podium and
 points; below it the predicted battles (coming up and already in range). Bottom: the lap-position line, with every car's dot
@@ -98,6 +98,9 @@ is running, `]` / `[` add and take off 1 s, `}` / `{` 10 s and `0` goes back to 
 car cross the line on TV and press the keys until the lap counter (or the car's dot) on the screen moves at the same moment. The
 delay is remembered between runs (`data/.watch_delay`; an explicit `--delay` overrides it), can be 0-300 s, and only changes what is
 shown: the recording, parser and runner stay live. Until the first data of that age exists the screen says so.
+
+The dashboard sets the terminal window's title to `F1 race dashboard · <session>` (`F1 predictions · <session>` for the qualifying
+viewer); `--title "US GP live"` picks your own. Most terminals restore the old title when your shell prompt comes back.
 
 **Battle prediction** (`live/race/battles.py`): a driver's pace is the median of the last 4 clean racing laps on the
 current stint (no in/out laps, green flag only, not lap 1-2); with fewer than 3 clean laps there is no pace and the model

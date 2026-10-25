@@ -537,6 +537,11 @@ def adjust_delay(delay, key, maximum=Feed.TRAIL_S):
     return min(max(delay + STEPS.get(key, 0.0), 0.0), float(maximum))
 
 
+def window_title(sess, custom=None):
+    """The terminal window's title: what you asked for with --title, else the session."""
+    return custom or f"F1 race dashboard · {sess}"
+
+
 def delay_file(data_dir):
     return Path(data_dir) / ".watch_delay"
 
@@ -591,6 +596,7 @@ def main():
     ap.add_argument("--delay", type=float, help="show the race as it was this many seconds ago, to match a delayed broadcast "
                                                  "(default: what you used last time)")
     ap.add_argument("--once", action="store_true", help="print one frame and exit")
+    ap.add_argument("--title", help="title of the terminal window (default: 'F1 race dashboard · <session>')")
     ap.add_argument("--view", choices=["usual", "optimal"], default="usual",
                     help="start with the projection (usual) or the finish with every driver on his best strategy (optimal); "
                          "the key s switches")
@@ -615,6 +621,7 @@ def main():
                       else Text(f"{sess}: no events yet"))
         return
     console = Console()
+    console.set_window_title(window_title(sess, args.title))          # restored by your shell's prompt when you quit
     stamp, drawn_at, drawn_delay, last_good = None, None, None, None
     error_log = Path(sess.data_dir) / ".watch_error.log"
     from rich.live import Live

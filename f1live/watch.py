@@ -60,12 +60,14 @@ def main(render, description):
     add_session_args(ap)
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between checks")
     ap.add_argument("--once", action="store_true", help="print the current state once and exit")
+    ap.add_argument("--title", help="title of the terminal window (default: 'F1 predictions · <session>')")
     args = ap.parse_args()
     sess = session_from_args(args)
 
     if args.once or not sys.stdout.isatty():
         print(screen(str(sess), read(sess.predictions), render))
         return
+    sys.stdout.write(f"\033]0;{args.title or f'F1 predictions · {sess}'}\007")        # the terminal window's title
     seen = None
     try:
         while True:

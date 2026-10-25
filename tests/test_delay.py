@@ -126,3 +126,9 @@ def test_a_drawing_error_shows_a_banner_over_the_last_good_frame_instead_of_endi
     assert "AttributeError" in log.read_text() and "Traceback" in log.read_text()
     shown2, _ = watch.safe_frame(broken, None, tmp_path / "missing" / "x.log")     # even an unwritable log is no reason to die
     assert shown2 is not None
+
+
+def test_the_window_title_is_the_session_unless_you_choose_one():
+    sess = Session("2026", "Austin", "race")
+    assert watch.window_title(sess) == "F1 race dashboard · 2026/Austin/race"
+    assert watch.window_title(sess, "US GP live") == "US GP live"
