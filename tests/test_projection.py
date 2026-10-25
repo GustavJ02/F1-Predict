@@ -20,7 +20,8 @@ def priors(passing=(2.0, 3.0), sc=0.0, effect=0.0):
         stint=dict(pooled={c: NEVER for c in P.COMPOUNDS}, circuits={}),
         transitions={a: {b: 1 for b in P.COMPOUNDS} for a in P.COMPOUNDS},
         pit_loss=dict(pooled=22.0, circuits={}), passing=dict(a=passing[0], b=passing[1], circuits={"Test": effect}),
-        safety=dict(sc_rate=sc, vsc_rate=0.0, sc_laps=4.0, vsc_laps=2.0, circuits={}))
+        safety=dict(sc_rate=sc, vsc_rate=0.0, sc_laps=4.0, vsc_laps=2.0, circuits={}),
+        start={"SOFT": 0.2, "MEDIUM": 0.6, "HARD": 0.2})
 
 
 def test_kaplan_meier_treats_censored_stints_as_at_least_that_long():
@@ -60,6 +61,7 @@ def test_shipped_priors_are_sane():
     assert 0.02 < pri["lap_model"]["fuel"] < 0.08 and pri["lap_model"]["offset"]["SOFT"] < pri["lap_model"]["offset"]["HARD"]
     assert pri["passing"]["b"] > 0 and pri["passing"]["circuits"]["Monaco"] < pri["passing"]["circuits"]["Abu_Dhabi"]
     assert 10 < pri["pit_loss"]["pooled"] < 35 and 0 < pri["safety"]["sc_rate"] < 0.05
+    assert sum(pri["start"].values()) == pytest.approx(1.0) and pri["start"]["MEDIUM"] > 0.3
     km = pri["stint"]["pooled"]["MEDIUM"]
     assert all(a < b for a, b in zip(km["age"], km["age"][1:])) and all(a >= b for a, b in zip(km["surv"], km["surv"][1:]))
 

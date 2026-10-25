@@ -41,12 +41,14 @@ def score(rank, actual, drivers):
                 top10=len(set(pred.nsmallest(10).index) & set(act.nsmallest(10).index)) / 10)
 
 
-def run(collected, data_dir=DATA, sims=400):
+def run(collected, data_dir=DATA, sims=400, only_year=None, by_year=True):
     rows = []
     for p in sorted(Path(data_dir).glob("*/*/race/events.csv")):
         year, race = p.parent.parent.parent.name, p.parent.parent.name
+        if only_year and year != str(only_year):
+            continue
         key, circuit = (year, race), P.circuit_of(year, race)
-        pri = P.fit(collected, exclude=[key])
+        pri = P.fit(collected, exclude=[key], lap_year=year if by_year else None)
         h = load(p)
         total = int(h["total_laps"].max())
         actual = final_order(h)
@@ -100,9 +102,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--sims", type=int, default=400)
     ap.add_argument("--csv")
+    ap.add_argument("--year", help="only score the races of this year")
+    ap.add_argument("--pooled", action="store_true", help="fit the lap model on all years instead of the race's own year")
     ap.add_argument("--data-dir", default=DATA, type=Path)
     a = ap.parse_args()
-    df = run(P.collect(a.data_dir), a.data_dir, a.sims)
+    df = run(P.collect(a.data_dir), a.data_dir, a.sims, a.year, not a.pooled)
     if a.csv:
         df.to_csv(a.csv, index=False)
     summarize(df)

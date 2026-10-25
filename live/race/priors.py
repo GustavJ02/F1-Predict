@@ -6,7 +6,9 @@ before this race shows its own behaviour.
                   retirement are censored: they were at least that long), per circuit and pooled; which compound follows which
     pit loss      seconds lost by a stop (in lap + out lap vs normal pace), per circuit and pooled
     passing       P(a car within 1.5 s gets past the car ahead on a lap) = logistic(a + b * pace advantage + circuit effect)
-    safety car    SC / VSC deployments per lap (per circuit, shrunk towards the pooled rate), typical length in laps
+    safety car    SC / VSC deployments per lap (per circuit, shrunk towards the pooled rate), typical length in laps,
+                  and how many times likelier one is in the first two laps (`early_boost`)
+    start         the share of cars starting the race on each compound (pooled)
 
 Estimated by `python -m live.race.priors`, which writes live/race/priors.json (committed, so the live runner doesn't
 need the data directory). Re-run it after a few more races. `collect` + `fit(..., exclude=...)` allow a
@@ -62,8 +64,9 @@ def collect_race(h, with_passes=True):
                     loss.append(dict(loss=float(np.clip(r["lap_time_s"] + g.loc[i + 1, "lap_time_s"] - 2 * nb.median(), 5, 60))))
 
     ts = h[h["event"] == "track_status"][["ts", "track_status", "race_lap"]]
+    deployed = ts["track_status"].isin(["SCDeployed", "VSCDeployed"])
     sc = dict(laps=total, sc=int((ts["track_status"] == "SCDeployed").sum()), vsc=int((ts["track_status"] == "VSCDeployed").sum()),
-              sc_laps=[], )
+              early=int((deployed & (ts["race_lap"] <= 2)).sum()), sc_laps=[], )
     start = None
     for _, r in ts.iterrows():
         if r["track_status"] in ("SCDeployed", "VSCDeployed") and start is None:
@@ -181,11 +184,18 @@ def fit_logistic(delta, passed, circuit, ridge=2.0, iters=40):
     return float(w[0]), float(w[1]), {c: float(w[2 + i]) for i, c in enumerate(cs)}
 
 
-def fit(collected, exclude=()):
-    """Priors (a JSON-able dict) from per-race tables; races in `exclude` ((year, race) keys) are left out."""
+MIN_YEAR_RACES = 6
+
+
+def fit(collected, exclude=(), lap_year=None):
+    """Priors (a JSON-able dict) from per-race tables; races in `exclude` ((year, race) keys) are left out.
+
+    The lap model (compound offsets and wear differ from season to season) is fitted on the races of `lap_year`
+    only, if there are at least MIN_YEAR_RACES of them; everything else uses all races."""
     items = {k: v for k, v in collected.items() if k not in set(exclude)}
     circ = {k: circuit_of(*k) for k in items}
-    lap_model = fit_lap_model(items)
+    same_year = {k: v for k, v in items.items() if lap_year is not None and k[0] == str(lap_year)}
+    lap_model = fit_lap_model(same_year if len(same_year) >= MIN_YEAR_RACES else items)
 
     stints = pd.concat([i["stints"].assign(circuit=circ[k], race=f"{k[0]}/{k[1]}") for k, i in items.items()],
                        ignore_index=True)
@@ -193,6 +203,7 @@ def fit(collected, exclude=()):
     for c in sorted(set(circ.values())):
         sub = stints[stints["circuit"] == c]
         km = {k: kaplan_meier(sub[sub["compound"] == k]) for k in COMPOUNDS if (sub["compound"] == k).sum() >= MIN_CIRCUIT_STINTS}
+        km = {k: v for k, v in km.items() if v["age"]}
         if km:
             stint["circuits"][c] = km
     seqs = stints.sort_values(["race", "driver", "stint"]).groupby(["race", "driver"])["compound"].apply(list)
@@ -218,13 +229,18 @@ def fit(collected, exclude=()):
     for k, i in items.items():
         d = per_c.setdefault(circ[k], dict(laps=0, sc=0, vsc=0))
         d["laps"] += i["sc"]["laps"]; d["sc"] += i["sc"]["sc"]; d["vsc"] += i["sc"]["vsc"]
-    safety = dict(sc_rate=sc_n / laps, vsc_rate=vsc_n / laps, sc_laps=float(np.mean(lens)) if lens else 4.0,
+    early = sum(i["sc"].get("early", 0) for i in items.values())
+    early_boost = float(np.clip((early / (2 * len(items))) / ((sc_n + vsc_n) / laps), 1.0, 8.0))
+    safety = dict(sc_rate=sc_n / laps, vsc_rate=vsc_n / laps, early_boost=early_boost, sc_laps=float(np.mean(lens)) if lens else 4.0,
                   vsc_laps=float(np.mean(vlens)) if vlens else 2.0,
                   circuits={c: dict(sc_rate=(d["sc"] + SHRINK_SC * sc_n / laps) / (d["laps"] + SHRINK_SC),
                                     vsc_rate=(d["vsc"] + SHRINK_SC * vsc_n / laps) / (d["laps"] + SHRINK_SC))
                             for c, d in per_c.items()})
+    first = stints[stints["stint"] == stints.groupby(["race", "driver"])["stint"].transform("min")]
+    shares = first["compound"].value_counts(normalize=True)
+    start = {c: float(shares.get(c, 0.0)) for c in COMPOUNDS}
     return dict(races=sorted(f"{y}/{r}" for y, r in items), lap_model=lap_model, stint=stint, transitions=trans,
-                pit_loss=pit, passing=passing, safety=safety)
+                pit_loss=pit, passing=passing, safety=safety, start=start)
 
 
 def save(priors, path=PRIORS_FILE):
@@ -241,7 +257,8 @@ def main():
     ap.add_argument("--data-dir", default=DATA, type=Path)
     ap.add_argument("--out", default=PRIORS_FILE, type=Path)
     a = ap.parse_args()
-    priors = fit(collect(a.data_dir, verbose=True))
+    collected = collect(a.data_dir, verbose=True)
+    priors = fit(collected)      # pooled over seasons: a per-season lap model (fit(..., lap_year=...)) backtested no better
     save(priors, a.out)
     lm, ps, sf = priors["lap_model"], priors["passing"], priors["safety"]
     print(f"\nwrote {a.out} from {len(priors['races'])} races")

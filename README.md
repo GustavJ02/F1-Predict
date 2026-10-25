@@ -35,7 +35,8 @@ pre/                 predictions made BEFORE a session, from past sessions
   quali/             parts.py (pace of each of Q1/Q2/Q3 from earlier sessions and parts), features.py (form, practice,
                      sprint-quali inputs), predict_grid.py (pole probabilities and
                      expected grid), backtest.py (score it on every past quali, with ablations)
-  race/              (not built yet)
+  race/              pace.py (race pace per driver and season rating), predict_result.py (finishing distribution per driver
+                     from the grid), backtest.py (score it on every past race)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
 data/                gitignored
   <year>/<race>/<session>/
@@ -167,6 +168,35 @@ python -m pre.quali.backtest                                         # score the
 Session folders from the archive are `fp1 fp2 fp3 sq sprint quali race`; the race folder is the meeting name
 without "Grand Prix", spaces as underscores (`Australian`, `Saudi_Arabian`, `United_States`, ...); a name with spaces
 or accents is accepted too and converted. `Austin` is an alias of `United_States`.
+
+## Before a race (pre.race)
+
+```bash
+python -m pre.race.predict_result 2026 Austin --laps 56              # finishing distribution for every driver
+python -m pre.race.predict_result 2026 Austin --grid ANT,LEC,VER,...  # the real grid if there are penalties
+python -m pre.race.backtest                                          # score it on every race we have
+```
+
+It prints, per driver, the grid slot, the mean finishing position, the P10-P90 range, the chances of a win / podium / top 10,
+and a small bar chart of the whole distribution over positions 1..22; the full table (`pos_1 ... pos_22`) goes to
+`data/<year>/<race>/pre_race.csv`.
+
+How it works (`pre/race/predict_result.py`): each driver's pace relative to the field is a regression on their *rating* (a
+recency-weighted average of their race pace in this season's earlier races, `pre/race/pace.py`, shrunk towards the team)
+and this weekend's qualifying gap; the grid is the qualifying result (a driver with no valid time starts last). The Monte
+Carlo of `live/race/projection.py` then runs the whole race from the lights with random starting compounds, the circuit's pit
+loss, stint lengths, passing difficulty and safety car rate. Because on the day the front of the field is stickier than a
+lap-time model sees (the pole-sitter won 68% of the 37 races in the backtest, the simulation alone gave him about 27%), each
+driver's distribution is blended 50/50 with a table of where cars starting from that slot really finished in the earlier
+races, then rebalanced so each position is taken exactly once.
+
+Backtest (37 races from 2025 round 5 to 2026 Singapore, each using only earlier races and priors fitted without it): the
+exact order is no better than assuming everybody finishes where they qualify (average rank error 2.50 vs 2.48 places; the
+winner is right 57% of the time against 68% for "pole wins"), the podium set is slightly better (75% vs 73%). The value is the
+distribution: the probability it gave the real finishing position averaged exp(-2.45), the best of the variants (the
+simulation alone: -2.51), and the chances are close to calibrated (points chances almost exactly; podium chances somewhat
+underconfident at the top: cars given 68% got a podium 82% of the time). Not modelled: weather, grid penalties (use
+--grid), team strategy, the first-lap chaos beyond a random spread of the starting gaps.
 
 ## Testing without a live session
 
