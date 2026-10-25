@@ -15,7 +15,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from f1live.events import load
+from f1live.events import has_events, load
 from f1live.paths import DATA
 from live.race.battles import HORIZON, THRESH, pair_table
 
@@ -101,7 +101,7 @@ if __name__ == "__main__":
     a = ap.parse_args()
     kw = {"use_slope": a.slope, **({"window": a.window} if a.window else {}), **({"min_laps": a.min_laps} if a.min_laps else {})}
     rows = []
-    for p in sorted(a.data_dir.glob(f"{a.year or '*'}/*/race/events.csv")):
+    for p in sorted(q for q in a.data_dir.glob(f"{a.year or '*'}/*/race/events.csv") if has_events(q)):
         rows += backtest_race(f"{p.parent.parent.parent.name}/{p.parent.parent.name}", load(p), **kw)
     df = pd.DataFrame(rows)
     if a.csv:

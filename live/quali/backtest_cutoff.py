@@ -13,7 +13,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from f1live.events import load
+from f1live.events import has_events, load
 from f1live.paths import DATA
 from pre.history import available
 from pre.quali.features import Tables
@@ -95,7 +95,7 @@ if __name__ == '__main__':
     ap.add_argument('--data-dir', default=DATA, type=type(DATA))
     a = ap.parse_args()
     sessions = [(f'{p.parent.parent.parent.name}/{p.parent.parent.name}', p)
-                for p in sorted(a.data_dir.glob(f'{a.year}/*/quali/events.csv'))]
+                for p in sorted(q for q in a.data_dir.glob(f'{a.year}/*/quali/events.csv') if has_events(q))]
     df = run(sessions, step=a.step, prior=a.prior, data_dir=a.data_dir)
     if a.csv:
         df.to_csv(a.csv, index=False)

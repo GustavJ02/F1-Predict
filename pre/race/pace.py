@@ -9,8 +9,8 @@ ratings: recency-weighted average of race_pace over the races before a given tim
 import numpy as np
 import pandas as pd
 from f1live.events import load
-from live.race.pace import clean_laps, lap_rows
-from live.race.priors import COMPOUNDS
+from live.race.pace import clean_laps, lap_rows, lap_temps
+from live.race.priors import COMPOUNDS, MIN_TEMP
 from live.race.projection import lap_time
 
 MIN_LAPS = 8
@@ -26,8 +26,10 @@ def race_pace(history, priors):
     if clean.empty:
         return pd.DataFrame(columns=["team", "rel", "n"])
     ci = clean["compound"].map({c: i for i, c in enumerate(COMPOUNDS)}).to_numpy()
-    clean["resid"] = clean["lap_time_s"].to_numpy() - lap_time(priors["lap_model"], 0.0, ci, clean["tyre_laps"].to_numpy(),
-                                                              clean["lap_number"].to_numpy())
+    model = priors["lap_model"]
+    temp = lap_temps(clean, model.get("temp_ref", 0.0), MIN_TEMP)
+    clean["resid"] = clean["lap_time_s"].to_numpy() - lap_time(model, 0.0, ci, clean["tyre_laps"].to_numpy(),
+                                                              clean["lap_number"].to_numpy(), temp=temp)
     g = clean.groupby("driver")
     keep = g["resid"].transform(lambda r: r <= r.median() + 1.5)
     clean = clean[keep]

@@ -28,7 +28,8 @@ live/                predictions run DURING a session
   race/              pace.py (race pace per driver), battles.py (who will be within 1 s of whom, in how many laps),
                      track.py (lap progress of each car from telemetry), priors.py + priors.json (what past races say
                      about tyres, stops, passing and safety cars), projection.py (Monte Carlo of the rest of the race),
-                     model.py (runner hook: battles + projection into predictions.csv), watch.py (full-screen dashboard),
+                     weather.py (rain detection), model.py (runner hook: battles + projection into predictions.csv),
+                     watch.py (full-screen dashboard),
                      backtest_battles.py / backtest_projection.py (score both on every recorded race)
 pre/                 predictions made BEFORE a session, from past sessions
   history.py         pace tables for any session in data/ (best valid lap per driver, gap to the fastest in %)
@@ -110,6 +111,31 @@ damage, team orders, and updating the circuit's passing difficulty from the race
 The standings come from the most recent row of each driver in `events.csv`; `run_session.sh` writes a snapshot of all
 drivers every 5 s (`SNAPSHOT`), which keeps them consistent. A finished session parsed without `--snapshot`
 can show duplicate positions.
+
+## Weather: temperature and rain
+
+Track and air temperature and rainfall are in `events.csv` (`track_temp`, `air_temp`, `rainfall`). I tested what they are worth,
+over the 41 races of 2025-26, and only put in what the data supports:
+
+- **Tyre wear depends on track temperature**, clearly: +0.8 / +0.5 / +0.6 ms of lap time per lap of tyre age per degree on
+  softs / mediums / hards (about +20% of the base wear per +10 C). It is in the lap model (`wear_temp`, `temp_ref` in
+  `live/race/priors.json`), used with each lap's own temperature to read a driver's pace, and with the current track
+  temperature (live) or the weekend's practice and qualifying temperature (pre-race, `--track-temp` to override) for
+  the rest of the race. **It does not improve the predictions**: the live projection scores 1.695 vs 1.696 places of rank error with
+  and without it, and the pre-race score is the same with no temperature, the weekend's, or the race's real mean (log probability
+  of the actual position -2.48 / -2.47 / -2.48). The effect is real but small beside everything else that moves a race. It
+  does show up in the playground (`--set temp=55`).
+- **Stint lengths do not depend on temperature** across races (-1% per 10 C, +-2%): teams bring harder tyres to hot tracks.
+- **Cars do not react differently in a way that can be predicted.** A per-team temperature slope on race pace makes the
+  leave-one-race-out error *worse* (0.346 -> 0.350 s in 2025, 0.496 -> 0.518 s in 2026) and the slopes don't carry over between
+  seasons (Ferrari -0.19 s per 10 C in 2025, +0.01 in 2026; Mercedes 0.0 then +0.18). Not used.
+- **Rain changes the race.** In the 6 wet races there were twice the safety cars and VSCs (1.3 against 0.7 per race each),
+  the grid was a worse guide (rank correlation 0.67 vs 0.80) and the pole-sitter won half of them instead of three quarters.
+  The model is dry-weather only, so **the live projection pauses while it rains** (weather feed, or two cars on intermediates /
+  wets; a `RAIN` badge in the header and "projection paused" in the panel; it resumes when it is dry). A pre-race "chance of
+  rain" that mixes in a wetter, noisier race was tried and removed: it made the wet races of the backtest *worse*, even when told
+  exactly which races were wet, and even when it only doubled the safety cars. The wet races are simply harder to predict
+  (log probability -2.56 against -2.47 for dry ones in the backtest).
 
 ## Central data store
 

@@ -108,6 +108,24 @@ def predict_pace(model, rt, q):
     return rel, pd.Series(sd)
 
 
+def session_track_temp(path):
+    """Median track temperature of a session (sensor gaps ignored), or None."""
+    try:
+        t = pd.read_csv(path, usecols=["track_temp"])["track_temp"]
+    except (ValueError, pd.errors.EmptyDataError):
+        return None
+    t = t[t > P.MIN_TEMP]
+    return float(t.median()) if len(t) else None
+
+
+def weekend_track_temp(av, year, race):
+    """What the track temperature of the race is expected to be: the median of this weekend's qualifying and second and
+    third practice sessions (None if none of them has weather data)."""
+    wk = av[(av["year"] == year) & (av["race"] == race_key(race)) & av["session"].isin(["quali", "fp2", "fp3"])]
+    temps = [t for t in (session_track_temp(p) for p in wk["path"]) if t is not None]
+    return float(np.median(temps)) if temps else None
+
+
 def race_laps_and_pace(av, year, race, laps=None):
     """(total laps, typical lap time) from the same circuit's last race we have, else the given/default values."""
     prev = av[(av["session"] == "race") & (av["race"] == race_key(race)) & (av["year"] < year)].sort_values("start")
@@ -142,10 +160,10 @@ def pace_sd_for(sd, order):
     return float(max(sd.reindex(order).fillna(sd.max()).max() * PACE_SD_SCALE, MIN_PACE_SD))
 
 
-def simulate_from_grid(grid, rel, sd, priors, circuit, total, tlap, sims=SIMS, seed=0, **opt):
+def simulate_from_grid(grid, rel, sd, priors, circuit, total, tlap, sims=SIMS, seed=0, temp=None, **opt):
     """grid: list of tla in starting order; rel: Series tla -> pace (s/lap vs the field); sd: Series of pace uncertainty."""
     cars = grid_cars(grid, rel)
-    defaults = dict(pace_sd=pace_sd_for(sd, grid), gap_noise=GAP_NOISE,
+    defaults = dict(pace_sd=pace_sd_for(sd, grid), gap_noise=GAP_NOISE, temp=temp,
                     comp0=start_compounds(priors, sims, len(grid), seed))      # (an extra first-lap safety car risk backtested worse)
     return simulate(cars, (tlap, 0, total), "AllClear", priors, circuit, sims, seed, **{**defaults, **opt})
 
@@ -171,21 +189,23 @@ def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, befor
     order = [d for d in order if d in rel.index]
     total, tlap = race_laps_and_pace(av, year, race, laps)
     return dict(order=order, rel=rel, sd=sd, total=total, tlap=tlap, circuit=P.circuit_of(year, race), model=model,
-                n_train=len(rows), rated=int(rt["rating"].notna().sum()) if len(rt) else 0, before=before), None
+                n_train=len(rows), rated=int(rt["rating"].notna().sum()) if len(rt) else 0, before=before,
+                temp=weekend_track_temp(av, year, race)), None
 
 
 def predict_weekend(archive, av, priors, year, race, grid=None, laps=None, sims=SIMS, seed=0, before=None, use_rating=True,
-                    blend=GRID_BLEND, **opt):
+                    blend=GRID_BLEND, track_temp="auto", **opt):
     """-> (DataFrame per driver with pos_1..pos_N, info) or (None, reason). `before`: only use races started before this."""
     w, why = prepare_weekend(archive, av, priors, year, race, grid, laps, before, use_rating)
     if w is None:
         return None, why
-    out, info = simulate_from_grid(w["order"], w["rel"], w["sd"], priors, w["circuit"], w["total"], w["tlap"], sims, seed, **opt)
+    temp = w["temp"] if track_temp == "auto" else track_temp
+    out, info = simulate_from_grid(w["order"], w["rel"], w["sd"], priors, w["circuit"], w["total"], w["tlap"], sims, seed, temp=temp, **opt)
     if blend:
         out = blend_with_grid(out, w["order"], finishing_table(archive, av, w["before"]), blend)
     out["grid"] = out["tla"].map({d: i + 1 for i, d in enumerate(w["order"])})
     out["rel_pace"] = out["tla"].map(w["rel"])
-    info.update(total_laps=w["total"], pace_model=w["model"], n_train=w["n_train"], rated=w["rated"])
+    info.update(total_laps=w["total"], pace_model=w["model"], n_train=w["n_train"], rated=w["rated"], temp=temp)
     return out, info
 
 
@@ -246,7 +266,8 @@ def percentile_range(row, n, lo=0.1, hi=0.9):
 
 def print_table(out, info, top=None):
     n = len([c for c in out.columns if c.startswith("pos_")])
-    print(f"{info['total_laps']} laps, pace model fitted on {info['n_train']} driver-races, "
+    temp = f", track {info['temp']:.0f} C" if info.get("temp") else ""
+    print(f"{info['total_laps']} laps{temp}, pace model fitted on {info['n_train']} driver-races, "
           f"{info['rated']} drivers rated, chance of a safety car / VSC {info['p_sc'] * 100:.0f}%\n")
     print(f" {'':3}{'DRV':4}{'GRID':>5} {'MEAN':>5} {'P10-P90':>8} {'WIN':>5} {'PODIUM':>7} {'TOP10':>6}   finishing position 1 {'.' * (n - 4)} {n}")
     for i, (_, r) in enumerate(out.head(top or len(out)).iterrows(), 1):
@@ -262,6 +283,8 @@ def main():
     ap.add_argument("race", help="data folder of the race, e.g. Austin or United_States")
     ap.add_argument("--laps", type=int, help="race distance (default: last year's race at the circuit)")
     ap.add_argument("--grid", help="comma-separated driver codes in starting order (default: the qualifying result)")
+    ap.add_argument("--track-temp", type=float, help="expected race-day track temperature in C (default: this weekend's "
+                                                      "qualifying and practice temperature)")
     ap.add_argument("--sims", type=int, default=SIMS)
     ap.add_argument("--csv", type=Path, help="write the full distribution here (default: data/<year>/<race>/pre_race.csv)")
     ap.add_argument("--data-dir", default=DATA, type=Path)
@@ -269,7 +292,8 @@ def main():
     av = available(a.data_dir)
     priors = P.load_priors()
     archive = RaceArchive(av[av["session"] == "race"].reset_index(drop=True), priors)
-    out, info = predict_weekend(archive, av, priors, a.year, a.race, a.grid.split(",") if a.grid else None, a.laps, a.sims)
+    out, info = predict_weekend(archive, av, priors, a.year, a.race, a.grid.split(",") if a.grid else None, a.laps, a.sims,
+                                track_temp=a.track_temp if a.track_temp is not None else "auto")
     if out is None:
         raise SystemExit(info)
     print_table(out, info)

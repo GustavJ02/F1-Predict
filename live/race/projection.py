@@ -17,8 +17,8 @@ average finishing position, which orders the projection.
 import numpy as np
 import pandas as pd
 from live.race.battles import latest
-from live.race.pace import clean_laps, lap_rows
-from live.race.priors import COMPOUNDS, circuit_of
+from live.race.pace import clean_laps, lap_rows, lap_temps
+from live.race.priors import COMPOUNDS, MIN_TEMP, circuit_of
 
 GAP_MIN = 1.0           # s, the closest a car follows another in dirty air (DRS range)
 PACE_SD = 0.10          # s, uncertainty of each car's pace estimate
@@ -34,11 +34,17 @@ N_SIMS = 400
 MAX_STOPS = 8          # stops per car for which the random draws are made up front
 
 
-def lap_time(model, base, comp, age, lap, wear_mult=1.0):
-    """Deterministic lap time. comp: array of compound indices into COMPOUNDS; wear_mult scales the tyre wear (per car)."""
+def lap_time(model, base, comp, age, lap, wear_mult=1.0, temp=None):
+    """Deterministic lap time. comp: array of compound indices into COMPOUNDS; wear_mult scales the tyre wear (per car);
+    temp is the track temperature in degrees C (a number or an array like age): tyres wear faster on a hot track and slower
+    on a cold one, relative to the average temperature the model was fitted at. None = no temperature effect."""
     off = np.array([model["offset"][c] for c in COMPOUNDS])
     wear = np.array([model["wear"][c] for c in COMPOUNDS])
-    return base + off[comp] + wear[comp] * age * wear_mult - model["fuel"] * lap
+    lt = base + off[comp] + wear[comp] * age * wear_mult - model["fuel"] * lap
+    if temp is not None and "wear_temp" in model:
+        wt = np.array([model["wear_temp"][c] for c in COMPOUNDS])
+        lt = lt + wt[comp] * age * (np.asarray(temp, float) - model["temp_ref"])
+    return lt
 
 
 def car_states(history, priors):
@@ -56,8 +62,9 @@ def car_states(history, priors):
     clean = clean_laps(laps)
     clean = clean[clean["compound"].isin(COMPOUNDS) & clean["tyre_laps"].notna()].copy()
     ci = clean["compound"].map({c: i for i, c in enumerate(COMPOUNDS)}).to_numpy()
+    temp = lap_temps(clean, model.get("temp_ref", 0.0), MIN_TEMP)
     clean["resid"] = clean["lap_time_s"].to_numpy() - lap_time(model, 0.0, ci, clean["tyre_laps"].to_numpy(),
-                                                              clean["lap_number"].to_numpy())
+                                                              clean["lap_number"].to_numpy(), temp=temp)
     base = clean.groupby("driver")["resid"].apply(lambda s: float(np.median(s.tail(PACE_LAPS))))
     used = laps[laps["compound"].isin(COMPOUNDS)].groupby("driver")["compound"].agg(lambda s: sorted(set(s)))
     wet = bool(laps["compound"].isin(["INTERMEDIATE", "WET"]).any())
@@ -87,7 +94,10 @@ def car_states(history, priors):
                          stops=int(r["n_pit_stops"]) if pd.notna(r["n_pit_stops"]) else 0,
                          used=len(used.get(drv, [])) , base=float(base.get(drv, field_base + 0.3)),
                          known=drv in base.index, needs_stop=(len(used.get(drv, [])) < 2) and not wet))
-    return pd.DataFrame(rows), (t_lead, n0, total)
+    cars_df = pd.DataFrame(rows)
+    recent = history[history["track_temp"].notna() & (history["track_temp"] > MIN_TEMP)].tail(300) if "track_temp" in history else []
+    cars_df.attrs["track_temp"] = float(recent["track_temp"].median()) if len(recent) else None     # now, held for the rest of the race
+    return cars_df, (t_lead, n0, total)
 
 
 def sample_stint(km, comp_idx, current_age, u, shape, spread=1.0):
@@ -141,6 +151,7 @@ def project(history, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     if R <= 1:
         return None, "race finished" if R <= 0 else "last lap"
     track = history["track_status"].dropna().iloc[-1] if history["track_status"].notna().any() else "AllClear"
+    opt.setdefault("temp", cars.attrs.get("track_temp"))
     return simulate(cars, meta, track, priors, circuit, n_sims, seed, **opt)
 
 
@@ -153,6 +164,8 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     median), pass_shift (added to the passing logit), friction (False = no traffic model); for a race that hasn't started:
     comp0 (n_sims x cars array of starting compound indices), gap_noise (s, random spread of the starting gaps),
     lap1_boost (multiplies the safety car rates on laps 1-2).
+
+    temp (track temperature in C, held for the whole race; None = no temperature effect).
 
     What-if options (see the play package):
     plans    {tla: Plan} cars that follow a fixed strategy: Plan.stops = [(race lap of the stop, compound index), ...]; they
@@ -168,6 +181,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     friction = opt.get("friction", True)
     t_lead, n0, total = meta
     R = total - n0
+    temp = opt.get("temp")                         # track temperature held for the rest of the race (None: no effect)
     rng = np.random.default_rng(seed)
     S, C = n_sims, len(cars)
     model, trans = priors["lap_model"], priors["transitions"]
@@ -229,7 +243,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         first_sc = start_sc
         had_sc |= under_sc | under_vsc
 
-        base_lt = lap_time(model, pace, comp, age, lap_no, wear_mult)         # deterministic, used for pass odds
+        base_lt = lap_time(model, pace, comp, age, lap_no, wear_mult, temp)  # deterministic, used for pass odds
         lt = base_lt + lap_noise * rng.standard_normal((S, C))
         lt = np.where(under_sc[:, None], t_lead * SC_LAP_FACTOR, np.where(under_vsc[:, None], lt * VSC_LAP_FACTOR, lt))
 

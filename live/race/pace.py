@@ -14,6 +14,14 @@ MAX_SLOWER = 1.0        # s above the stint median
 FIRST_CLEAN_LAP = 3
 
 
+def lap_temps(rows, fallback, min_temp=5.0):
+    """Track temperature at each of `rows` (a lap table) as an array, `fallback` where there is no reading (sensor gap, or the
+    recording has no weather columns)."""
+    if "track_temp" not in rows:
+        return np.full(len(rows), fallback if fallback is not None else 0.0)
+    return rows["track_temp"].where(rows["track_temp"] > min_temp).fillna(fallback if fallback is not None else 0.0).to_numpy()
+
+
 def lap_rows(history):
     laps = history[(history["event"] == "lap") & history["driver"].notna()].sort_values(["driver", "ts"])
     return laps

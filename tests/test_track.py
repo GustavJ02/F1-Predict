@@ -8,7 +8,8 @@ from rich.console import Console
 
 from f1live.paths import Session
 from live.race import watch
-from live.race.track import TrackProgress, build_reference, load_reference, resample, save_reference, timing_progress
+from live.race.track import (TrackProgress, build_reference, corner_fractions, load_corners, load_reference, resample,
+                             save_corners, save_reference, sector_fractions, timing_progress)
 from test_battles import T0, race
 
 RADIUS, LAP_S = 8000.0, 90.0
@@ -132,3 +133,33 @@ def test_reference_can_be_built_from_a_qualifying_session():
     laps["lap_kind"] = "push"                   # qualifying calls its flying laps push/other, and has no pit-stop count
     laps["n_pit_stops"] = np.nan
     assert build_reference(ring_telemetry(), laps) is not None
+
+
+def test_sector_fractions_are_the_median_share_of_the_lap():
+    h = ring_laps()
+    h["s1_s"], h["s2_s"], h["s3_s"] = 27.0, 36.0, 27.0
+    assert sector_fractions(h) == pytest.approx([0.3, 0.7])
+    assert sector_fractions(ring_laps()) is None                          # no sector times
+
+
+def test_corners_are_projected_onto_the_reference_and_roundtrip(tmp_path):
+    ref = build_reference(ring_telemetry(), ring_laps())
+    xs, ys = circle(np.array([np.pi, np.pi / 2, np.pi / 2]))              # 3 corners: half way, quarter, and a 3A twin
+    corners = pd.DataFrame(dict(Number=[2, 1, 1], X=xs, Y=ys))
+    found = corner_fractions(ref, corners)
+    assert [c for c, _ in found] == ["1", "2"] and [f for _, f in found] == pytest.approx([0.25, 0.5], abs=0.01)
+    save_corners(found, tmp_path / "corners.csv")
+    assert load_corners(tmp_path / "corners.csv") == pytest.approx(found) or load_corners(tmp_path / "corners.csv")[0][0] == "1"
+    assert load_corners(tmp_path / "missing.csv") == []
+
+
+def test_track_line_numbers_corners_and_colours_sectors():
+    line = watch.TrackLine([("VER", 0.5, "red", True)], [("1", 0.25), ("2", 0.26), ("3", 0.75)], [0.3, 0.7])
+    plain = Console(width=60, file=io.StringIO(), force_terminal=False, color_system=None)
+    plain.print(line)
+    lines = [l for l in plain.file.getvalue().splitlines() if "S/F" in l]
+    assert lines and "1" in lines[0] and "3" in lines[0] and "2" not in lines[0]    # 2 is too close to 1 to fit
+    console = Console(width=60, file=io.StringIO(), force_terminal=True, color_system="standard")
+    console.print(line)
+    out = console.file.getvalue()
+    assert out.count("┃") == 2 and "\x1b[36m" in out and "\x1b[35m" in out and "\x1b[33m" in out

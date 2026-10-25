@@ -10,8 +10,13 @@ Progress of a car = the nearest reference point to its latest position, searched
 parallel stretches of track can't be confused. Without a reference (or telemetry) `timing_progress` estimates it as
 the time since the car's last lap crossing divided by its pace.
 
+Corners and sectors for the track line: `main` also writes data/<year>/<race>/corners.csv (corner number and lap
+fraction, from FastF1's circuit info projected onto the reference lap; needs network, skipped if unavailable).
+Sector boundaries come from the sector times in events.csv: the median share of the lap time spent in S1 and S1+S2,
+so they are time-based approximations of where the boundaries are.
+
 Usage (from the repo root):
-    python -m live.race.track 2026 Austin quali           # write data/2026/Austin/track.csv
+    python -m live.race.track 2026 Austin quali           # write data/2026/Austin/track.csv and corners.csv
 """
 import argparse
 import numpy as np
@@ -97,6 +102,61 @@ def timing_progress(lat, now, pace):
     return out
 
 
+def sector_fractions(laps):
+    """[end of S1, end of S2] as fractions of the lap (median over laps with all three sector times), or None."""
+    cols = ["s1_s", "s2_s", "s3_s"]
+    if not set(cols) <= set(laps.columns):
+        return None
+    l = laps[laps["event"] == "lap"].dropna(subset=cols)
+    if len(l) < 3:
+        return None
+    total = l[cols].sum(axis=1)
+    return [float((l["s1_s"] / total).median()), float(((l["s1_s"] + l["s2_s"]) / total).median())]
+
+
+def corner_fractions(ref, corners):
+    """[(label, lap fraction)] in lap order: each corner (DataFrame with Number, X, Y) at its nearest reference point.
+    A corner number split into several (6A, 6B) is kept once."""
+    ref = np.asarray(ref, float)
+    out = {}
+    for _, c in corners.iterrows():
+        label = str(int(c["Number"]))
+        if label not in out:
+            out[label] = int(np.hypot(ref[:, 0] - c["X"], ref[:, 1] - c["Y"]).argmin()) / len(ref)
+    return sorted(out.items(), key=lambda kv: kv[1])
+
+
+def save_corners(corners, path):
+    pd.DataFrame(corners, columns=["corner", "frac"]).to_csv(path, index=False)
+
+
+def load_corners(path):
+    try:
+        df = pd.read_csv(path)
+        return [(str(int(c)), float(f)) for c, f in zip(df["corner"], df["frac"])]
+    except (FileNotFoundError, KeyError, pd.errors.EmptyDataError):
+        return []
+
+
+def fetch_corners(year, race):
+    """FastF1 circuit info corners (Number, X, Y) of the race's circuit; the race is found by its location, country or
+    name matching the folder name ('Austin', 'Great_Britain'). None if it can't be found or there is no network."""
+    import fastf1
+    from fastf1.mvapi import get_circuit_info
+    try:
+        sched = fastf1.get_event_schedule(int(year), include_testing=False)
+        want = race.lower().replace("_", " ")
+        for _, ev in sched.iterrows():
+            if want in (str(ev["Location"]).lower(), str(ev["Country"]).lower(), str(ev["EventName"]).lower()):
+                session = fastf1.get_session(int(year), ev["RoundNumber"], "Q")      # has happened before the race
+                session.load(laps=False, telemetry=False, weather=False, messages=False)
+                key = session.session_info["Meeting"]["Circuit"]["Key"]
+                return get_circuit_info(year=int(year), circuit_key=key).corners
+    except Exception as e:                      # offline, unknown event, API change: the line just has no corners
+        print(f"no corners: {e}")
+    return None
+
+
 def save_reference(ref, path):
     pd.DataFrame(ref, columns=["x", "y"]).to_csv(path, index=False)
 
@@ -124,6 +184,10 @@ def main():
     save_reference(ref, out)
     length = np.hypot(*np.diff(np.vstack([ref, ref[:1]]), axis=0).T).sum() / 10
     print(f"wrote {out}  ({len(ref)} points, lap length about {length:.0f} m)")
+    corners = fetch_corners(sess.year, sess.race)
+    if corners is not None:
+        save_corners(corner_fractions(ref, corners), out.parent / "corners.csv")
+        print(f"wrote {out.parent / 'corners.csv'}  ({len(corners)} corners)")
 
 
 if __name__ == "__main__":

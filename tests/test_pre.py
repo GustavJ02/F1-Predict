@@ -96,3 +96,15 @@ def test_available_skips_a_session_that_has_no_events_yet(tmp_path):
     header.mkdir(parents=True)
     (header / "events.csv").write_text("ts,event,driver\n")
     assert list(available(tmp_path)["race"]) == ["A"]
+
+
+def test_scripts_that_read_every_race_skip_a_race_being_recorded(tmp_path):
+    from f1live.events import has_events
+    live = tmp_path / "events.csv"
+    assert not has_events(live)                          # no file yet
+    live.write_text("")
+    assert not has_events(live)                          # created by the parser, nothing written
+    live.write_text("ts,event\n")
+    assert not has_events(live)                          # header only
+    live.write_text("ts,event\n2026-10-25T20:00:00Z,lap\n")
+    assert has_events(live)

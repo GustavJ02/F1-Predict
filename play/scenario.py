@@ -26,7 +26,7 @@ from pre.race import predict_result as PR
 from pre.race.pace import RaceArchive
 
 POINTS_TABLE = np.array([25, 18, 15, 12, 10, 8, 6, 4, 2, 1], float)
-GLOBAL_OPTS = {"sc": "safety car rate multiplier", "pass_shift": "added to the passing logit (negative = harder to pass)",
+GLOBAL_OPTS = {"temp": "track temperature in C (tyres wear faster when it is hot)", "sc": "safety car rate multiplier", "pass_shift": "added to the passing logit (negative = harder to pass)",
                "pit_scale": "multiplier on the pit loss", "lap_noise": "s of noise per lap", "dnf": "retirement rate multiplier"}
 
 
@@ -105,7 +105,7 @@ class Scenario:
         if w is None:
             raise ValueError(why)
         cars = PR.grid_cars(w["order"], w["rel"])
-        opt = dict(pace_sd=PR.pace_sd_for(w["sd"], w["order"]), gap_noise=PR.GAP_NOISE)
+        opt = dict(pace_sd=PR.pace_sd_for(w["sd"], w["order"]), gap_noise=PR.GAP_NOISE, temp=PR.weekend_track_temp(av, int(year), race))
         comp0 = PR.start_compounds(priors, sims, len(cars), seed)
         return cls(cars, (w["tlap"], 0, w["total"]), "AllClear", priors, w["circuit"], comp0, opt, sims, seed,
                    f"{year} {race} (pre-race, {w['total']} laps)", rel=w["rel"], order=w["order"])
@@ -119,7 +119,7 @@ class Scenario:
         if cars is None:
             raise ValueError(meta)
         track = history["track_status"].dropna().iloc[-1] if history["track_status"].notna().any() else "AllClear"
-        sc = cls(cars, meta, track, priors, P.circuit_of(session.year, session.race), None, {}, sims, seed,
+        sc = cls(cars, meta, track, priors, P.circuit_of(session.year, session.race), None, {"temp": cars.attrs.get("track_temp")}, sims, seed,
                  f"{session} (live, lap {meta[1]}/{meta[2]})")
         sc.needs_stop = dict(zip(cars["tla"], cars["needs_stop"]))
         return sc

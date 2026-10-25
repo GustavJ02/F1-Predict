@@ -11,3 +11,11 @@ def prepare(df):
 
 def load(path):
     return prepare(pd.read_csv(path))
+
+
+def has_events(path):
+    """True if the events.csv has at least one event: a session that is being recorded right now may still be empty."""
+    try:
+        return len(pd.read_csv(path, usecols=["ts"], nrows=1)) > 0
+    except (pd.errors.EmptyDataError, ValueError, FileNotFoundError):
+        return False

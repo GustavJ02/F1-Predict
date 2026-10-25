@@ -6,6 +6,7 @@ Every call returns the rows of one batch (all sharing a ts):
     kind='battle'      position (of the front car), drivers ('ANT PIA NOR'), numbers, gaps (s, one per neighbouring pair),
                        laps (one per pair, 0 = within range now), in_laps (soonest pair), now (any pair in range)
     kind='status'      note: why there are no battles to show (collecting pace data, safety car, none expected)
+    kind='projection_status'  note: why the projection is paused (rain: the model is dry-weather only)
     kind='projection'  one row per running car: driver (number), tla, position (now), proj_rank (projected finish),
                        mean_pos, p_win, p_podium, p_points, stops_left (expected), laps_left, p_sc (chance of a
                        safety car/VSC before the flag), note (race-level text)
@@ -16,6 +17,7 @@ import pandas as pd
 from live.race import priors as P
 from live.race.battles import HORIZON, find_battles
 from live.race.projection import project
+from live.race.weather import wet_now
 
 _priors = None
 _last = {"key": None}
@@ -62,7 +64,12 @@ def predict(state, history, info):
                                          numbers=" ".join(b["numbers"]), gaps=" ".join(f"{g:.1f}" for g in b["gaps"]),
                                          laps=" ".join(f"{l:.0f}" for l in b["laps"]), in_laps=b["in_laps"], now=b["now"])
                                     for b in battles]))
-    proj = projection_rows(history, info)
-    if proj is not None:
-        frames.append(proj)
+    if wet_now(history):
+        # the projection is a dry-weather model: say so instead of showing numbers that no longer mean anything
+        frames.append(pd.DataFrame([dict(kind="projection_status", note="rain: projection paused (dry-tyre model)")]))
+        _last["key"] = None                                   # project again as soon as it is dry
+    else:
+        proj = projection_rows(history, info)
+        if proj is not None:
+            frames.append(proj)
     return pd.concat(frames, ignore_index=True).assign(**base)

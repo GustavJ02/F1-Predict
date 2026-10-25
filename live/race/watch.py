@@ -29,12 +29,15 @@ from f1live.tail import CsvTail
 from f1live.watch import read
 from live.race.battles import HORIZON, THRESH, latest
 from live.race.pace import driver_pace
-from live.race.track import TrackProgress, build_reference, load_reference, timing_progress
+from live.race.track import (TrackProgress, build_reference, load_corners, load_reference, sector_fractions,
+                             timing_progress)
+from live.race.weather import wet_now
 
 TYRE = {"SOFT": ("S", "red"), "MEDIUM": ("M", "yellow"), "HARD": ("H", "white"), "INTERMEDIATE": ("I", "green"),
         "WET": ("W", "blue")}
 TRACK = {"AllClear": ("GREEN", "green"), "Yellow": ("YELLOW", "yellow"), "SCDeployed": ("SAFETY CAR", "bold yellow"),
          "VSCDeployed": ("VSC", "yellow"), "VSCEnding": ("VSC ENDING", "yellow"), "Red": ("RED FLAG", "bold red")}
+SECTOR_COLOUR = ("cyan", "magenta", "yellow")
 MAX_BATTLES = 8
 TEAM_COLOUR = {"Red Bull Racing": "#3671C6", "Ferrari": "#E8002D", "Mercedes": "#27F4D2", "McLaren": "#FF8000",
                "Aston Martin": "#229971", "Alpine": "#FF87BC", "Williams": "#64C4FF", "Racing Bulls": "#6692FF",
@@ -159,10 +162,16 @@ def projection_panel(preds, history=None, max_rows=22):
     points probabilities and the expected number of stops still to come."""
     rows = preds[preds["kind"] == "projection"] if preds is not None and "kind" in preds else None
     if rows is None or rows.empty:
+        paused = preds[preds["kind"] == "projection_status"] if preds is not None and "kind" in preds else None
+        if paused is not None and len(paused):
+            return Text(str(paused.iloc[-1]["note"]), style="bold blue")
         return Text("waiting for the first projection (needs a few clean laps) ...", style="dim")
     status = preds[preds["kind"] == "status"]
     if len(status) and status.iloc[-1]["ts"] >= rows["ts"].max() and status.iloc[-1]["note"] == "race finished":
         return Text("race finished: the standings are the result", style="dim italic")
+    paused = preds[preds["kind"] == "projection_status"]
+    if len(paused) and paused["ts"].max() >= rows["ts"].max():
+        return Text(str(paused.iloc[-1]["note"]), style="bold blue")
     rows = rows[rows["ts"] == rows["ts"].max()].sort_values("proj_rank")
     now = {}
     if history is not None and len(history):
@@ -202,32 +211,47 @@ def header(history, preds, sess):
     t.append(f"/{total}" if total else "", style="dim")
     t.append("    ")
     t.append(f" {label} ", style=f"{style} reverse" if style else "reverse")
+    if wet_now(history):
+        t.append("  ")
+        t.append(" RAIN ", style="bold blue reverse")
     t.append(f"    {history['ts'].max():%H:%M:%S} UTC", style="dim")
     return t
 
 
 class TrackLine:
     """One line for the lap (start/finish at both ends) with a dot per car and its code above, staggered over
-    TRACK_ROWS rows so cars close together stay readable (a label that can't be placed is dropped, its dot stays)."""
-    def __init__(self, cars):
+    TRACK_ROWS rows so cars close together stay readable (a label that can't be placed is dropped, its dot stays).
+    The line is coloured by sector (sectors: the lap fractions where S1 and S2 end) and corners (corners:
+    [(number, fraction)]) are numbered under it, as many as fit."""
+    def __init__(self, cars, corners=(), sectors=None):
         self.cars = cars            # [(code, progress 0-1, style, is_leader)]
+        self.corners = corners
+        self.sectors = sectors
 
     def __rich_console__(self, console, options):
         W = max(options.max_width, 20)
         H = TRACK_ROWS + 2
         grid = [[(" ", "")] * W for _ in range(H)]
         line = TRACK_ROWS
-        grid[line] = [("─", "dim")] * W
+        bounds = [0, *(self.sectors or []), 1]
+        for x in range(W):
+            sector = sum(x / (W - 1) >= b for b in bounds[1:-1]) if self.sectors else None
+            grid[line][x] = ("─", SECTOR_COLOUR[sector] if self.sectors else "dim")
+        for frac in self.sectors or []:
+            grid[line][int(frac * (W - 1))] = ("┃", "bold")
         grid[line][0], grid[line][-1] = ("├", "dim"), ("┤", "dim")
-        for frac in (0.25, 0.5, 0.75):
-            grid[line][int(frac * (W - 1))] = ("┼", "dim")
-        for frac, label in ((0, "S/F"), (0.25, "25%"), (0.5, "50%"), (0.75, "75%")):
-            x = int(frac * (W - 1))
-            for k, ch in enumerate(label):
-                if x + k < W:
-                    grid[line + 1][x + k] = (ch, "dim")
         for k, ch in enumerate("S/F"):
+            grid[line + 1][k] = (ch, "dim")
             grid[line + 1][W - 3 + k] = (ch, "dim")
+        free = 4                                                # first column a corner label may use (after "S/F ")
+        for label, frac in self.corners:
+            x = int(frac * (W - 1))
+            if grid[line][x][0] in "─":
+                grid[line][x] = ("┼", grid[line][x][1])
+            if x >= free and x + len(label) <= W - 4:           # numbers that would collide are dropped
+                for k, ch in enumerate(label):
+                    grid[line + 1][x + k] = (ch, "dim")
+                free = x + len(label) + 1
         row_end = [-2] * TRACK_ROWS
         placed = []
         for code, frac, style, leader in sorted(self.cars, key=lambda c: c[1]):
@@ -251,6 +275,15 @@ class TrackLine:
             for ch, st in row:
                 t.append(ch, style=st or None)
             yield t
+
+
+def sector_legend(sectors):
+    """'S1 S2 S3' in the sector colours (empty without sector times)."""
+    t = Text()
+    for i, colour in enumerate(SECTOR_COLOUR if sectors else ()):
+        t.append(f"S{i + 1}", style=f"bold {colour}")
+        t.append("  ")
+    return t
 
 
 def track_cars(history, progress):
@@ -278,6 +311,7 @@ class Feed:
         self.buffer = []                  # telemetry kept only until the reference lap exists
         self.pos = {}                     # driver -> (ts, x, y)
         self.tracker = None
+        self.corners = load_corners(sess.dir.parent / "corners.csv")
         ref = load_reference(sess.dir.parent / "track.csv")
         if ref is not None:
             self.tracker = TrackProgress(ref)
@@ -304,6 +338,10 @@ class Feed:
             if ref is not None:
                 self.tracker, self.buffer = TrackProgress(ref), []
 
+    def sectors(self):
+        """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""
+        return None if self.history is None else sector_fractions(self.history)
+
     def progress(self):
         """-> ({driver: progress 0-1}, 'telemetry' | 'timing' | None)."""
         h = self.history
@@ -328,9 +366,10 @@ def prepare_telemetry(df):
     return df
 
 
-def render(history, preds, sess="", height=40, progress=None, width=140):
+def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None):
     """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
-    progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line.
+    progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line, with its corners and
+    sector boundaries (Feed.corners, Feed.sectors()).
     A wide screen gets three columns (standings | projected finish | battles); otherwise the right column is split."""
     layout = Layout()
     layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 4))
@@ -351,9 +390,9 @@ def render(history, preds, sess="", height=40, progress=None, width=140):
     prog, mode = progress or ({}, None)
     cars = track_cars(history, prog) if ok and prog else []
     note = {"telemetry": "from car telemetry", "timing": "estimated from lap timing"}.get(mode, "waiting for positions")
-    layout["foot"].update(Panel(TrackLine(cars) if cars else Text("no positions yet", style="dim"),
+    layout["foot"].update(Panel(TrackLine(cars, corners, sectors) if cars else Text("no positions yet", style="dim"),
                                 title=f"Lap position ({note})", title_align="left",
-                                subtitle="◆ leader", subtitle_align="right"))
+                                subtitle=Text.assemble(sector_legend(sectors), "◆ leader"), subtitle_align="right"))
     return layout
 
 
@@ -367,7 +406,8 @@ def main():
     feed = Feed(sess)
 
     def frame(height, width):
-        return render(feed.history, read(sess.predictions), str(sess), height, feed.progress(), width)
+        return render(feed.history, read(sess.predictions), str(sess), height, feed.progress(), width, feed.corners,
+                      feed.sectors())
 
     if args.once or not sys.stdout.isatty():
         feed.poll()

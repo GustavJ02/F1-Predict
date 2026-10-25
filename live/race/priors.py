@@ -18,7 +18,7 @@ import argparse, json, warnings
 from pathlib import Path
 import numpy as np
 import pandas as pd
-from f1live.events import load
+from f1live.events import has_events, load
 from f1live.paths import DATA
 from pre.history import race_key
 from live.race.battles import pair_table
@@ -28,6 +28,7 @@ PRIORS_FILE = Path(__file__).with_name("priors.json")
 COMPOUNDS = ["SOFT", "MEDIUM", "HARD"]
 CIRCUIT_ALIASES = {("2025", "Spanish"): "Barcelona"}      # the 2025 'Spanish' GP was Barcelona; 2026 Spanish is Madrid
 PASS_CLIP = (-1.0, 2.0)
+MIN_TEMP = 5.0           # track temperatures at or below this are sensor gaps
 MIN_CIRCUIT_STINTS = 10          # stints of a compound needed before a circuit gets its own survival curve
 SHRINK_STOPS, SHRINK_PASS, SHRINK_SC = 3, 40, 25          # pseudo-observations pulling a circuit towards the pooled value
 
@@ -46,7 +47,8 @@ def collect_race(h, with_passes=True):
     c = c[c["compound"].isin(COMPOUNDS) & c["tyre_laps"].notna()].copy()
     c["med"] = c.groupby(["driver", "stint"])["lap_time_s"].transform("median")
     c = c[c["lap_time_s"] < c["med"] + 1.5]
-    clean = c.rename(columns={"tyre_laps": "age", "lap_number": "lap"})[["driver", "stint", "compound", "age", "lap", "lap_time_s"]]
+    c["temp"] = c["track_temp"].where(c["track_temp"] > MIN_TEMP)            # 0 / missing readings are sensor gaps
+    clean = c.rename(columns={"tyre_laps": "age", "lap_number": "lap"})[["driver", "stint", "compound", "age", "lap", "lap_time_s", "temp"]]
 
     stints, loss = [], []
     for drv, g in laps.groupby("driver"):
@@ -113,7 +115,7 @@ def collect_passes(h, laps):
 def collect(data_dir=DATA, with_passes=True, verbose=False):
     """{(year, race): per-race tables} for every race with an events.csv."""
     out = {}
-    for p in sorted(Path(data_dir).glob("*/*/race/events.csv")):
+    for p in sorted(q for q in Path(data_dir).glob("*/*/race/events.csv") if has_events(q)):
         year, race = p.parent.parent.parent.name, p.parent.parent.name
         if verbose:
             print("collecting", year, race, flush=True)
@@ -128,18 +130,23 @@ def fit_lap_model(items):
     g = d.groupby(["race", "driver"])
     y = d["lap_time_s"] - g["lap_time_s"].transform("mean")
     X = pd.DataFrame({"lap": d["lap"] - g["lap"].transform("mean")})
+    temp_ref = float(d["temp"].mean())
+    dt = (d["temp"] - temp_ref).fillna(0.0)                  # a lap without a temperature reading is taken at the reference
     for comp in COMPOUNDS:
         ind = (d["compound"] == comp).astype(float)
         X["off_" + comp] = ind - ind.groupby([d["race"], d["driver"]]).transform("mean")
         a = d["age"] * ind
         X["age_" + comp] = a - a.groupby([d["race"], d["driver"]]).transform("mean")
+        at = a * dt
+        X["ageT_" + comp] = at - at.groupby([d["race"], d["driver"]]).transform("mean")
     beta = np.linalg.lstsq(X.values, y.values, rcond=None)[0]
     b = dict(zip(X.columns, beta))
     off = {c: b["off_" + c] for c in COMPOUNDS}
     ref = off["MEDIUM"]                                      # driver pace is the level on mediums
     resid = y.values - X.values @ beta
     return dict(fuel=float(-b["lap"]), offset={c: float(off[c] - ref) for c in COMPOUNDS},
-                wear={c: float(b["age_" + c]) for c in COMPOUNDS}, lap_noise=float(np.std(resid)))
+                wear={c: float(b["age_" + c]) for c in COMPOUNDS}, lap_noise=float(np.std(resid)),
+                wear_temp={c: float(b["ageT_" + c]) for c in COMPOUNDS}, temp_ref=temp_ref)
 
 
 def kaplan_meier(stints):

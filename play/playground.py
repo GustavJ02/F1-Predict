@@ -8,6 +8,7 @@ so read the differences more than the absolute numbers.
     python -m play.playground pre 2026 Austin --plan HAM=S-14-H --plan NOR=H-30-M --set HAM.pace=-0.1 --show VER
     python -m play.playground pre 2026 Austin --try HAM=S-24-H --try HAM=M-25-H --try HAM=S-12-M-34-H   # one by one
     python -m play.playground pre 2026 Austin --move HAM=2 --set sc=2 --set pass_shift=-1
+    python -m play.playground pre 2026 Austin --try HAM=S-24-H --try HAM=M-25-H --set temp=55   # on a very hot track
     python -m play.playground live 2026 Austin race --plan HAM=M-38-H --sc-react    # from the current state of the race
 
 Strategies: compound-lap-compound ..., e.g. M-25-H (mediums, stop lap 25, hards) or S-10-M-30-H. In a live race the first
@@ -16,6 +17,7 @@ compound is the one on the car now and the stop laps must be in the future.
 --set NAME=VALUE changes:
     DRV.pace=-0.1    seconds per lap for that driver (negative = faster)       DRV.wear=0.8   tyre wear x0.8 (better tyre care)
     DRV.pit=1.5      extra seconds in every one of that driver's stops          sc=2           safety car / VSC rate x2
+    temp=50          track temperature in C (tyres wear faster when hot)
     pass_shift=-1    passing logit shift (negative = harder to pass)            pit_scale=1.2  every pit stop x1.2
     dnf=2            retirement rate x2                                        lap_noise=0.3  seconds of noise per lap
 --move DRV=N (before the race) puts the driver on grid slot N; --sc-react lets planned cars take a free stop under a safety car.

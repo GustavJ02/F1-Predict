@@ -12,7 +12,7 @@ import warnings
 
 import numpy as np
 import pandas as pd
-from f1live.events import load
+from f1live.events import has_events, load
 from f1live.paths import DATA
 from live.quali.predict_pole import predict
 from live.quali.state import session_state
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     ap.add_argument('--csv', help='write every prediction to this file')
     ap.add_argument('--data-dir', default=DATA, type=type(DATA))
     a = ap.parse_args()
-    sessions = [(p.parent.parent.name, p) for p in sorted((a.data_dir / a.year).glob('*/quali/events.csv'))]
+    sessions = [(p.parent.parent.name, p) for p in sorted(q for q in (a.data_dir / a.year).glob('*/quali/events.csv') if has_events(q))]
     df = run(sessions, step=a.step)
     if a.csv:
         df.to_csv(a.csv, index=False)

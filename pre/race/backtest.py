@@ -17,6 +17,7 @@ from f1live.events import load
 from f1live.paths import DATA
 from live.race import priors as P
 from live.race.pace import lap_rows
+from live.race.weather import is_wet_race
 from pre.history import available
 from pre.race.pace import RaceArchive, actual_order
 from pre.race.predict_result import predict_weekend, quali_table
@@ -51,7 +52,7 @@ def score(out, actual, grid):
     return res
 
 
-def run(collected, data_dir=DATA, sims=600, use_rating=True):
+def run(collected, data_dir=DATA, sims=600, use_rating=True, temp_mode="auto"):
     av = available(data_dir)
     races = av[av["session"] == "race"].sort_values("start").reset_index(drop=True)
     rows, samples = [], []
@@ -60,11 +61,21 @@ def run(collected, data_dir=DATA, sims=600, use_rating=True):
     for i, r in enumerate(races.itertuples()):
         if i < MIN_EARLIER or quali_table(av, r.year, r.race) is None:
             continue
+        h = load(r.path)
+        if h["race_lap"].max() < h["total_laps"].max() - 1:         # a race still being recorded has no result yet
+            continue
         key = next((k for k in collected if k[0] == str(r.year) and P.circuit_of(*k) == P.circuit_of(str(r.year), r.race)
                     and race_match(k, r)), None)
         pri = P.fit(collected, exclude=[key] if key else [])
         archive.priors = priors_all                      # race-pace tables don't depend on the held-out race
-        out, info = predict_weekend(archive, av, pri, r.year, r.race, sims=sims, use_rating=use_rating, before=r.start)
+        track_temp = "auto"
+        if temp_mode == "none":
+            track_temp = None
+        elif temp_mode == "oracle":                      # upper bound: the race's real mean track temperature
+            from pre.race.predict_result import session_track_temp
+            track_temp = session_track_temp(r.path)
+        out, info = predict_weekend(archive, av, pri, r.year, r.race, sims=sims, use_rating=use_rating, before=r.start,
+                                    track_temp=track_temp)
         if out is None:
             continue
         actual = archive.result(r.path)
@@ -72,7 +83,7 @@ def run(collected, data_dir=DATA, sims=600, use_rating=True):
         sc = score(out, actual, q["rank"].to_dict())
         samples.append(sc.pop("samples").assign(race=f"{r.year}/{r.race}"))
         for name, m in sc.items():
-            rows.append(dict(race=f"{r.year}/{r.race}", model=name, **m))
+            rows.append(dict(race=f"{r.year}/{r.race}", model=name, wet=bool(is_wet_race(h)), **m))
     return pd.DataFrame(rows), pd.concat(samples)
 
 
@@ -88,6 +99,11 @@ def summarize(df, samples):
     sim = df[df["model"] == "simulation"]
     print(f"\nsimulation: P(actual winner) {sim['p_winner'].mean():.3f}, podium Brier {sim['podium_brier'].mean():.3f}, "
           f"points Brier {sim['points_brier'].mean():.3f}, mean log P(actual position) {sim['log_pos'].mean():.2f}")
+    if df["wet"].any():
+        w = sim.groupby("wet").agg(races=("race", "size"), p_winner=("p_winner", "mean"), podium_brier=("podium_brier", "mean"),
+                                   points_brier=("points_brier", "mean"), log_pos=("log_pos", "mean")).round(3)
+        print("\nwet races (rain on the weather feed or wet tyres for >5% of the race) against dry ones:")
+        print(w.to_string())
     for col, y, bins in (("p_win", "win", [-.01, .02, .1, .3, .5, 1.0]), ("p_podium", "podium", [-.01, .05, .2, .4, .6, .8, 1.0]),
                          ("p_points", "points", [-.01, .2, .5, .8, .95, 1.0])):
         b = pd.cut(samples[col], bins)
@@ -100,10 +116,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--sims", type=int, default=600)
     ap.add_argument("--no-rating", action="store_true", help="pace from qualifying only (ablation)")
+    ap.add_argument("--temp", choices=["auto", "none", "oracle"], default="auto",
+                    help="track temperature used: the weekend's own (auto), none, or the race's real one (oracle)")
     ap.add_argument("--csv")
     ap.add_argument("--data-dir", default=DATA, type=Path)
     a = ap.parse_args()
-    df, samples = run(P.collect(a.data_dir), a.data_dir, a.sims, not a.no_rating)
+    df, samples = run(P.collect(a.data_dir), a.data_dir, a.sims, not a.no_rating, a.temp)
     if a.csv:
         df.to_csv(a.csv, index=False)
     summarize(df, samples)
