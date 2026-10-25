@@ -6,6 +6,11 @@ fairly. The search is coarse-to-fine: a coarse grid of stop laps over all legal 
 around the best few, then the finalists are re-simulated with many more runs for the numbers you read. The pit window of a
 stop is the range of laps whose result is within a tolerance of the best.
 
+Tyres: a driver only has so many fresh sets of each compound for the weekend (the allocation minus the sets already used in
+practice, qualifying and the sprint, or earlier in the race), so only plans that fit are ranked and the output says what
+the limits cost (play/tyres.py). Say what a driver really has with --sets HAM=S0,M2,H1, rule a compound out with --ban HAM=S,
+or switch the limits off with --tyres none.
+
 What 'best' means (--objective): points (expected championship points from the finishing position), win, podium, position
 (mean finishing position).
 
@@ -23,6 +28,7 @@ Usage (from the repo root):
 import argparse
 import itertools
 import os
+from collections import Counter
 import time
 import warnings
 from concurrent.futures import ProcessPoolExecutor
@@ -32,6 +38,7 @@ import pandas as pd
 from live.race.priors import COMPOUNDS
 from play.scenario import POINTS_TABLE, Scenario, compare
 from play.strategy import MIN_STINT, Plan
+from play.tyres import add_tyre_args, configure_tyres
 
 OBJECTIVES = {"points": "expected points", "win": "chance of winning", "podium": "chance of a podium",
               "position": "mean finishing position (lower is better)"}
@@ -137,7 +144,7 @@ def score_many(search, plans, sims, jobs):
 def _with_sims(scenario, sims):
     """The same scenario with a different number of runs (the random draws are regenerated for the new count)."""
     clone = Scenario(scenario.cars, scenario.meta, scenario.track, scenario.priors, scenario.circuit, None, scenario.opt, sims,
-                     scenario.seed, scenario.label, scenario.rel, scenario.order)
+                     scenario.seed, scenario.label, scenario.rel, scenario.order, tyres=scenario.tyres)
     if scenario.comp0 is not None:
         from pre.race import predict_result as PR
         clone.comp0 = PR.start_compounds(scenario.priors, sims, len(scenario.cars), scenario.seed)
@@ -146,10 +153,15 @@ def _with_sims(scenario, sims):
 
 def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_stint=None, top=8, search_sims=400,
              final_sims=3000, refine=5, opt=None, sc_react=False, verbose=True, tolerance=None, min_survival=0.1,
-             jobs=None):
-    """-> (DataFrame of the best strategies, {'baseline': stats, 'windows': [...]}). See the module docstring."""
+             jobs=None, tyres="auto"):
+    """-> (DataFrame of the best strategies, info dict). See the module docstring.
+
+    tyres: the sets each driver has left (play.tyres.TyreSets); "auto" = the scenario's own, None = no limits. Only plans that
+    fit the driver's sets are ranked. If the limits keep out a better plan, info['unrestricted'] says which and what it was
+    worth."""
     if objective not in OBJECTIVES:
         raise ValueError(f"unknown objective '{objective}' (choose from {', '.join(OBJECTIVES)})")
+    tyres = scenario.tyres if isinstance(tyres, str) and tyres == "auto" else tyres
     live = scenario.done > 0
     row = scenario.cars.set_index("tla").loc[driver]
     first = COMPOUNDS[int(row["comp"])] if live else None
@@ -160,6 +172,9 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
     search = Search(scenario, driver, objective, opt or {}, sc_react)
     t0 = time.time()
 
+    def fits(plan):
+        return tyres is None or not tyres.check(driver, plan)
+
     if legal_any and 0 not in stops:
         stops = (0,) + tuple(stops)                          # a car that is already legal may simply stay out
     plans = []
@@ -169,13 +184,15 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
         for seq in sequences(n, first, must_change=not legal_any):
             plans += [Plan(seq, laps) for laps in grids]
     plans = [p for p in plans if plan_survival(scenario, driver, p) >= min_survival]   # stints longer than tyres ever last
+    if not any(fits(p) for p in plans):
+        raise ValueError(f"{driver} has no strategy that fits the tyres left ({tyres.describe(driver)}): "
+                         "try --allow-used or --sets to say what he really has")
     if verbose:
         print(f"{driver}: {len(plans)} candidate strategies in the coarse search ({search_sims} runs each) ...", flush=True)
     jobs = jobs or min(os.cpu_count() or 1, 16)
     scored = {str(p): (v, p) for p, v in zip(plans, score_many(search, plans, search_sims, jobs))}
 
-    best = sorted(scored.values(), key=lambda x: -x[0])[:refine]
-    for value, plan in list(best):                              # local search around the best few
+    def improve(value, plan):                                   # local search: move the stop laps around
         current, v = plan, value
         improved = True
         while improved:
@@ -201,10 +218,20 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
                         current, v, improved = cand, sv, True
         scored[str(current)] = (v, current)
 
-    ranked = sorted(scored.values(), key=lambda x: -x[0])
+    ranked_all = sorted(scored.values(), key=lambda x: -x[0])
+    seeds = ranked_all[:refine] + [x for x in ranked_all if fits(x[1])][:refine]       # the best overall and the best that fit
+    for value, plan in {str(p): (v, p) for v, p in seeds}.values():
+        improve(value, plan)
+
+    ranked_all = sorted(scored.values(), key=lambda x: -x[0])
+    ranked = [x for x in ranked_all if fits(x[1])]
     finalists = [p for _, p in ranked[:max(top * 2, 10)]]
     for n in stops:                                              # always include the best plan of each number of stops
         finalists += [p for _, p in ranked if len(p.laps) == n][:1]
+    free_plan = ranked_all[0][1]
+    limited = not fits(free_plan)                                # the limits keep out the best plan
+    if limited:
+        finalists.append(free_plan)
     finalists = list({str(p): p for p in finalists}.values())
     if verbose:
         print(f"re-simulating the {len(finalists)} best with {final_sims} runs ...", flush=True)
@@ -214,18 +241,25 @@ def optimize(scenario, driver, objective="points", stops=(1, 2), step=None, min_
     for plan in finalists:
         res = sc_final.run(plans={driver: plan}, sc_react=sc_react, **(opt or {}))
         c = compare(base, res, [driver]).iloc[0]
-        s = res.stats(driver)
+        st = res.stats(driver)
         rows.append(dict(strategy=str(plan), stops=len(plan.laps), life=plan_survival(scenario, driver, plan),
-                         value=objective_value(res.column(driver), objective),
-                         mean_pos=s["mean_pos"], p_win=s["p_win"], p_podium=s["p_podium"], exp_points=s["exp_points"],
+                         value=objective_value(res.column(driver), objective), fits=fits(plan),
+                         mean_pos=st["mean_pos"], p_win=st["p_win"], p_podium=st["p_podium"], exp_points=st["exp_points"],
                          d_points=c["d_points"], se_points=c["se_points"], d_pos=c["d_pos"], se_pos=c["se_pos"], plan=plan))
-    full = pd.DataFrame(rows).sort_values("value", ascending=False).reset_index(drop=True)
+    everything = pd.DataFrame(rows).sort_values("value", ascending=False).reset_index(drop=True)
+    full = everything[everything["fits"]].reset_index(drop=True)
     table = full.head(top).reset_index(drop=True)
     by_stops = full.groupby("stops").head(1).sort_values("stops").reset_index(drop=True)
     best_plan = table.loc[0, "plan"]
     windows = pit_windows(sc_final, driver, best_plan, objective, tolerance, opt or {}, sc_react, jobs=jobs)
     info = dict(baseline=base.stats(driver), windows=windows, by_stops=by_stops, tolerance=tolerance, seconds=time.time() - t0,
-                scenario=scenario.label, objective=objective)
+                scenario=scenario.label, objective=objective,
+                tyres=None if tyres is None else tyres.describe(driver), unrestricted=None)
+    if limited:
+        free = everything[everything["strategy"] == str(free_plan)].iloc[0]
+        info["unrestricted"] = dict(strategy=str(free_plan), value=float(free["value"]), exp_points=float(free["exp_points"]),
+                                    mean_pos=float(free["mean_pos"]), cost=float(free["value"] - table.loc[0, "value"]),
+                                    missing=tyres.check(driver, free_plan))
     return table, info
 
 
@@ -263,7 +297,10 @@ def print_result(table, info, driver):
     base = info["baseline"]
     print(f"\n{driver} - {info['scenario']} - best strategies by {OBJECTIVES[obj]}  ({info['seconds']:.0f} s)")
     print(f"as predicted (the field's usual stop plans): mean position {base['mean_pos']:.2f}, win {base['p_win'] * 100:.1f}%, "
-          f"podium {base['p_podium'] * 100:.1f}%, expected points {base['exp_points']:.2f}\n")
+          f"podium {base['p_podium'] * 100:.1f}%, expected points {base['exp_points']:.2f}")
+    if info.get("tyres"):
+        print(f"tyres: {info['tyres']}")
+    print()
     print(f" {'#':>2} {'strategy':<14} {'mean pos':>8} {'win':>6} {'podium':>7} {'E[pts]':>7} {'tyre life':>9}   vs prediction (points / places)")
     for i, r in table.iterrows():
         print(f" {i + 1:>2} {r['strategy']:<14} {r['mean_pos']:>8.2f} {r['p_win'] * 100:>5.1f}% {r['p_podium'] * 100:>6.1f}% "
@@ -272,6 +309,12 @@ def print_result(table, info, driver):
         print("\nbest by number of stops: " + "   ".join(
             f"{int(r['stops'])}-stop {r['strategy']} ({r['exp_points']:.2f} pts, {r['mean_pos']:.2f})" if r["stops"] else
             f"no stop {r['strategy']} ({r['exp_points']:.2f} pts, {r['mean_pos']:.2f})" for _, r in info["by_stops"].iterrows()))
+    free = info.get("unrestricted")
+    if free:
+        cost = {"points": f"{free['cost']:.2f} points", "position": f"{free['cost']:.2f} places",
+                "win": f"{free['cost'] * 100:.1f} points of win chance", "podium": f"{free['cost'] * 100:.1f} points of podium chance"}[obj]
+        print(f"\nthe tyre limits cost {cost}: without them {free['strategy']} would be better "
+              f"({free['exp_points']:.2f} pts, mean position {free['mean_pos']:.2f}), but it " + "; ".join(free["missing"]))
     if info["windows"]:
         print(f"\npit windows for {table.loc[0, 'strategy']} (laps within {info['tolerance']} of the best {OBJECTIVES[obj].split(' (')[0]}):")
         for w in info["windows"]:
@@ -299,6 +342,7 @@ def main():
     ap.add_argument("--grid", help="pre-race: comma-separated driver codes in starting order (penalties)")
     ap.add_argument("--sc-react", action="store_true", help="the planned car takes a free stop under a safety car")
     ap.add_argument("--set", action="append", default=[], metavar="HAM.pace=-0.1", help="tweaks applied to every candidate")
+    add_tyre_args(ap)
     a = ap.parse_args()
     from f1live.paths import Session
     from play.scenario import parse_tweak
@@ -308,6 +352,7 @@ def main():
     else:
         year, race, session, drivers = a.args[0], a.args[1], a.args[2], a.args[3:]
         scenario = Scenario.live(Session(year, race, session), sims=a.search_sims)
+    configure_tyres(scenario, a)
     tweaks, opt = {}, {}
     for text in a.set:
         drv, what, value = parse_tweak(text)
@@ -318,8 +363,11 @@ def main():
     if tweaks:
         opt["tweaks"] = tweaks
     for driver in [d.upper() for d in drivers]:
-        table, info = optimize(scenario, driver, a.objective, tuple(a.stops), a.step, None, a.top, a.search_sims, a.final_sims,
-                               opt=opt, sc_react=a.sc_react, tolerance=a.tolerance, min_survival=a.min_survival, jobs=a.jobs)
+        try:
+            table, info = optimize(scenario, driver, a.objective, tuple(a.stops), a.step, None, a.top, a.search_sims, a.final_sims,
+                                   opt=opt, sc_react=a.sc_react, tolerance=a.tolerance, min_survival=a.min_survival, jobs=a.jobs)
+        except ValueError as e:
+            raise SystemExit(f"error: {e}")
         print_result(table, info, driver)
 
 

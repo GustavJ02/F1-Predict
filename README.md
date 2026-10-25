@@ -261,6 +261,16 @@ tolerance of the best. Plans with a stint longer than the tyre has ever lasted a
 and the "tyre life" column shows how routine the longest stint is. A race under way also considers not stopping again if the
 driver already used two compounds.
 
+**Tyres.** A driver only has the weekend's allocation of fresh sets (2 hard / 3 medium / 8 soft on a normal weekend, 2 / 4 / 6 at a
+sprint weekend: the most any driver used of each in the 41 weekends of 2025-26) minus the sets already used. Every stint that began
+on a new set (`tyre_new`) in FP1-FP3, sprint qualifying, the sprint and qualifying (plus the race so far when live) takes one off, so
+the optimizer only ranks strategies that fit what is left, and says what the limit costs ("without them S-22-H would be better ... it
+needs 1 SOFT set, 0 available -> 0.18 points lost"). In Austin 2026 ANT has no fresh soft left (8 used), HAM one, LEC two, VER three.
+`--sets HAM=S0,M2,H1` says what a driver really has (also for "doesn't want to": `--ban HAM=S`), `--allocation H2,M3,S8` changes the
+allocation, `--allow-used S1` counts that many used sets as fresh (optimistic: how worn a used set is isn't known and the simulation
+starts every stint on a fresh tyre), `--tyres none` switches the limit off. The playground flags a plan the driver has no tyres for.
+The other cars' usual stop plans (the "as predicted" baseline) don't respect their tyre sets.
+
 Read the results with these limits in mind: the other cars don't react to your plan (a rival would cover an undercut), the plan is
 followed exactly, the numbers are only as good as the pace, tyre and passing assumptions in `live/race/priors.json`, and chances
 here come from the simulation alone (no blend with the grid table that `pre.race.predict_result` applies, which would shrink the

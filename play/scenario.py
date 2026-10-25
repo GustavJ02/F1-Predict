@@ -24,6 +24,7 @@ from live.race.projection import car_states, simulate
 from pre.history import available
 from pre.race import predict_result as PR
 from pre.race.pace import RaceArchive
+from play.tyres import TyreSets
 
 POINTS_TABLE = np.array([25, 18, 15, 12, 10, 8, 6, 4, 2, 1], float)
 GLOBAL_OPTS = {"temp": "track temperature in C (tyres wear faster when it is hot)", "sc": "safety car rate multiplier", "pass_shift": "added to the passing logit (negative = harder to pass)",
@@ -85,10 +86,11 @@ class Scenario:
     """The state a race simulation starts from, plus the settings shared by every run of it."""
 
     def __init__(self, cars, meta, track, priors, circuit, comp0=None, opt=None, sims=1000, seed=0, label="",
-                 rel=None, order=None, needs_stop=None):
+                 rel=None, order=None, needs_stop=None, tyres=None):
         self.cars, self.meta, self.track, self.priors, self.circuit = cars, meta, track, priors, circuit
         self.comp0, self.opt, self.sims, self.seed, self.label = comp0, dict(opt or {}), sims, seed, label
         self.rel, self.order = rel, order                       # pre-race only: lets `run(grid=...)` rebuild the grid
+        self.tyres = tyres                                      # play.tyres.TyreSets: which sets each driver has left (or None)
         self.total, self.done = meta[2], meta[1]
 
     @property
@@ -108,7 +110,8 @@ class Scenario:
         opt = dict(pace_sd=PR.pace_sd_for(w["sd"], w["order"]), gap_noise=PR.GAP_NOISE, temp=PR.weekend_track_temp(av, int(year), race))
         comp0 = PR.start_compounds(priors, sims, len(cars), seed)
         return cls(cars, (w["tlap"], 0, w["total"]), "AllClear", priors, w["circuit"], comp0, opt, sims, seed,
-                   f"{year} {race} (pre-race, {w['total']} laps)", rel=w["rel"], order=w["order"])
+                   f"{year} {race} (pre-race, {w['total']} laps)", rel=w["rel"], order=w["order"],
+                   tyres=TyreSets.from_weekend(Path(data_dir), year, race))
 
     @classmethod
     def live(cls, session, history=None, sims=1000, seed=0, priors=None):
@@ -119,8 +122,9 @@ class Scenario:
         if cars is None:
             raise ValueError(meta)
         track = history["track_status"].dropna().iloc[-1] if history["track_status"].notna().any() else "AllClear"
+        tyres = TyreSets.from_weekend(session.data_dir, session.year, session.race, history=history)
         sc = cls(cars, meta, track, priors, P.circuit_of(session.year, session.race), None, {"temp": cars.attrs.get("track_temp")}, sims, seed,
-                 f"{session} (live, lap {meta[1]}/{meta[2]})")
+                 f"{session} (live, lap {meta[1]}/{meta[2]})", tyres=tyres)
         sc.needs_stop = dict(zip(cars["tla"], cars["needs_stop"]))
         return sc
 

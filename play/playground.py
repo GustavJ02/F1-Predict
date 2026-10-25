@@ -9,7 +9,8 @@ so read the differences more than the absolute numbers.
     python -m play.playground pre 2026 Austin --try HAM=S-24-H --try HAM=M-25-H --try HAM=S-12-M-34-H   # one by one
     python -m play.playground pre 2026 Austin --move HAM=2 --set sc=2 --set pass_shift=-1
     python -m play.playground pre 2026 Austin --try HAM=S-24-H --try HAM=M-25-H --set temp=55   # on a very hot track
-    python -m play.playground live 2026 Austin race --plan HAM=M-38-H --sc-react    # from the current state of the race
+    python -m play.playground live 2026 Austin race --plan HAM=M-38-H --sc-react
+    python -m play.playground pre 2026 Austin --try ANT=S-24-H --ban ANT=S     # a plan the driver has no tyres for gets a warning    # from the current state of the race
 
 Strategies: compound-lap-compound ..., e.g. M-25-H (mediums, stop lap 25, hards) or S-10-M-30-H. In a live race the first
 compound is the one on the car now and the stop laps must be in the future.
@@ -21,6 +22,11 @@ compound is the one on the car now and the stop laps must be in the future.
     pass_shift=-1    passing logit shift (negative = harder to pass)            pit_scale=1.2  every pit stop x1.2
     dnf=2            retirement rate x2                                        lap_noise=0.3  seconds of noise per lap
 --move DRV=N (before the race) puts the driver on grid slot N; --sc-react lets planned cars take a free stop under a safety car.
+
+Tyres: each driver has the weekend's allocation minus the fresh sets used so far (practice, qualifying, sprint; the race so far when
+live). A plan that needs sets he doesn't have is flagged "(!)" (it is still simulated, as if he did). Say what he really has with
+--sets HAM=S0,M2,H1, rule compounds out with --ban HAM=S, change the allocation with --allocation H2,M3,S8, count used sets as fresh
+with --allow-used S1, or switch it off with --tyres none.
 """
 import argparse
 import warnings
@@ -29,6 +35,7 @@ import pandas as pd
 from f1live.paths import Session
 from play.scenario import GLOBAL_OPTS, Scenario, compare, parse_tweak
 from play.strategy import Plan
+from play.tyres import add_tyre_args, configure_tyres
 
 
 def parse_plan(text):
@@ -75,6 +82,7 @@ def main():
     ap.add_argument("--laps", type=int, help="race distance (pre-race; default: last year's race at the circuit)")
     ap.add_argument("--grid", help="pre-race: comma-separated driver codes in starting order (penalties)")
     ap.add_argument("--sc-react", action="store_true")
+    add_tyre_args(ap)
     a = ap.parse_args()
 
     if a.source == "pre":
@@ -82,6 +90,11 @@ def main():
     else:
         scenario = Scenario.live(Session(a.args[0], a.args[1], a.args[2]), sims=a.sims)
     print(scenario.label)
+    configure_tyres(scenario, a)
+
+    def tyre_warnings(drv, plan):
+        problems = scenario.tyres.check(drv, plan) if scenario.tyres else []
+        return [f"(!) {drv}: {plan} " + "; ".join(problems) + f"   [{scenario.tyres.describe(drv)}]"] if problems else []
 
     plans = dict(parse_plan(t) for t in a.plan)
     tweaks, opts = {}, {}
@@ -101,6 +114,8 @@ def main():
     if plans or tweaks or opts or moves:
         for drv, plan in plans.items():
             print(describe(drv, plan, scenario.total))
+            for w in tyre_warnings(drv, plan):
+                print(w)
         for drv, tw in tweaks.items():
             print(f"{drv}: " + ", ".join(f"{k} {v:+g}" for k, v in tw.items()))
         if opts or moves:
@@ -116,7 +131,8 @@ def main():
         c = compare(base, alt, [drv]).iloc[0]
         rows.append(dict(driver=drv, strategy=str(plan), mean_pos=c["alt_pos"], d_pos=c["d_pos"], se_pos=c["se_pos"],
                          win=c["alt_win"] * 100, podium=c["alt_podium"] * 100, points=c["alt_points"], d_points=c["d_points"],
-                         se_points=c["se_points"], legal="" if plan.legal() else "illegal"))
+                         se_points=c["se_points"], legal="illegal" if not plan.legal() else
+                         ("no tyres!" if tyre_warnings(drv, plan) else "")))
     if rows:
         print("\nstrategies tried one by one (vs the race as predicted):")
         print(f" {'':4}{'strategy':<16}{'mean pos':>9}{'':>16}{'win %':>7}{'podium %':>9}{'E[points]':>10}{'':>20}")
