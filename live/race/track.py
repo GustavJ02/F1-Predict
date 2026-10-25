@@ -1,6 +1,6 @@
 """How far along the lap each car is: from car telemetry projected onto a reference lap, else from lap timing.
 
-Reference lap: the x/y samples of one clean racing lap (lap crossing to lap crossing, same driver, green, no stop),
+Reference lap: the x/y samples of one clean flying lap (lap crossing to lap crossing, same driver, green, no stop),
 resampled to N points of equal distance, so progress 0 is the start/finish line (to within the crossing's timing
 accuracy) and 1 is one full lap. It is built from the session's own telemetry once a clean lap exists, or loaded from
 data/<year>/<race>/track.csv, which `python -m live.race.track 2026 Austin quali` writes from any session's telemetry
@@ -19,6 +19,7 @@ import pandas as pd
 from f1live.events import prepare
 from f1live.paths import add_session_args, session_from_args
 
+FLYING = ("racing", "push", "other")     # lap kinds of a lap run at speed (race laps, qualifying/practice flying laps)
 N_POINTS = 600
 MIN_POINTS = 40         # distinct positions needed on the reference lap (the feed gives about 70 per lap)
 MAX_CLOSING_GAP = 0.05  # start and end of the reference lap must be within this fraction of its length
@@ -49,9 +50,10 @@ def build_reference(telemetry, laps):
         g = g.reset_index(drop=True)
         for i in range(1, len(g)):
             a, b = g.iloc[i - 1], g.iloc[i]
-            if not (b["lap_kind"] == "racing" and a["lap_kind"] in ("racing", "out") and b["track_status"] == "AllClear"
-                    and a["track_status"] == "AllClear" and b["n_pit_stops"] == a["n_pit_stops"]
-                    and b["lap_time_s"] < 1.05 * best and b["lap_number"] >= 3):
+            same_stops = (pd.isna(a["n_pit_stops"]) and pd.isna(b["n_pit_stops"])) or a["n_pit_stops"] == b["n_pit_stops"]
+            if not (b["lap_kind"] in FLYING and a["lap_kind"] in FLYING + ("out",) and b["track_status"] == "AllClear"
+                    and a["track_status"] == "AllClear" and same_stops and b["lap_time_s"] < 1.05 * best
+                    and b["lap_number"] >= 3):
                 continue
             s = tel[(tel["driver"] == drv) & (tel["ts"] >= a["ts"]) & (tel["ts"] <= b["ts"])]
             xy = s[["x", "y"]].to_numpy(float)

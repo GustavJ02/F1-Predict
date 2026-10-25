@@ -125,3 +125,10 @@ def test_dashboard_has_the_track_panel():
     console.print(watch.render(h, None, "2026/Test/race", 40, ({"10": 0.4, "11": 0.35}, "telemetry")))
     text = console.file.getvalue()
     assert "Lap position (from car telemetry)" in text and "◆" in text and "S/F" in text
+
+
+def test_reference_can_be_built_from_a_qualifying_session():
+    laps = ring_laps()
+    laps["lap_kind"] = "push"                   # qualifying calls its flying laps push/other, and has no pit-stop count
+    laps["n_pit_stops"] = np.nan
+    assert build_reference(ring_telemetry(), laps) is not None
