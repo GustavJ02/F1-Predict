@@ -8,6 +8,7 @@ Usage (from the repo root); writes data/<year>/<race>/<session>/raw.txt:
     python -m f1live.archive 2026 Singapore race                  # meeting search text + our session name
     python -m f1live.archive 2026 Singapore quali --archive-name Qualifying
     python -m f1live.archive 2026 Austin quali --path "2026/2026-10-25_United_States_Grand_Prix/2026-10-24_Qualifying/"
+    python -m f1live.archive 2026 Singapore quali --telemetry     # car telemetry -> raw_telemetry.txt (raw.txt untouched)
 
 Uses the archive layout FastF1 uses (Index.json + <Topic>.jsonStream).
 """
@@ -24,6 +25,7 @@ HTTP.mount(LIVETIMING_URL, LivetimingAuthAdapter(token_manager))
 TOPICS = ["SessionInfo", "DriverList", "TimingData", "TimingAppData", "TimingStats", "LapCount",
           "TrackStatus", "RaceControlMessages", "WeatherData", "ExtrapolatedClock", "SessionData",
           "SessionStatus", "Heartbeat", "TopThree", "PitLaneTimeCollection"]
+TELEMETRY_TOPICS = ["CarData.z", "Position.z"]      # big (10s of MB for a race): fetched only on request
 
 
 def get_json(url):
@@ -75,6 +77,8 @@ def main():
     else:
         add_session_args(ap)
         ap.add_argument("--path", help="archive path of the session (skips the search)")
+        ap.add_argument("--telemetry", action="store_true",
+                        help="fetch CarData/Position into raw_telemetry.txt instead (raw.txt may already exist)")
         ap.add_argument("--archive-name", help="session name in the archive (default: derived from session)")
         a = ap.parse_args()
 
@@ -85,12 +89,37 @@ def main():
 
     sess = session_from_args(a)
     path = a.path or find_path(a.year, a.race, a.archive_name or ARCHIVE_NAMES.get(a.session, a.session))
-    if sess.raw.exists():
-        sys.exit(f"{sess.raw} already exists; move it away first")
+    target = sess.raw_telemetry if a.telemetry else sess.raw
+    if target.exists():
+        sys.exit(f"{target} already exists; move it away first")
     try:
-        download(path, sess.raw)
+        (download_telemetry if a.telemetry else download)(path, target)
     except RuntimeError as e:
         sys.exit(str(e))
+
+
+def download_telemetry(path, out, verbose=True):
+    """Fetch CarData/Position of the archive session at `path` into `out`, in the recorder's line format.
+    Lines are in stream order with an empty ts: every sample carries its own UTC stamp, so no anchoring is needed."""
+    out.parent.mkdir(parents=True, exist_ok=True)
+    events = []
+    for topic in TELEMETRY_TOPICS:
+        n = 0
+        for off, payload in stream(path, topic):
+            events.append((off, topic, payload))
+            n += 1
+        if verbose:
+            print(f"  {topic}: {n} messages")
+    if not events:
+        raise RuntimeError(f"no telemetry in the archive for {path}")
+    events.sort(key=lambda e: e[0])
+    tmp = out.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        for off, topic, payload in events:
+            f.write(str([topic, payload, ""]) + "\n")
+    tmp.replace(out)
+    if verbose:
+        print(f"wrote {len(events)} messages to {out}")
 
 
 def download(path, out, verbose=True):
