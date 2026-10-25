@@ -19,18 +19,27 @@ def race_key(race):
     return ALIASES.get(race, race)
 
 
+def _first_ts(path):
+    """Timestamp of the first event of a session, or None if the file has no events (yet)."""
+    try:
+        ts = pd.read_csv(path, usecols=["ts"], nrows=1)["ts"]
+    except (pd.errors.EmptyDataError, ValueError):
+        return None
+    return ts.iloc[0] if len(ts) else None
+
+
 def available(data_dir=DATA):
-    """DataFrame (year, race, session, path) of every session that has an events.csv, in calendar order."""
+    """DataFrame (year, race, session, path, start) of every session that has events in its events.csv, in calendar order.
+    A session that is being recorded right now and has no events yet is left out."""
     rows = []
     for ev in sorted(data_dir.glob("*/*/*/events.csv")):
         sess, race, year = ev.parent.name, ev.parent.parent.name, ev.parent.parent.parent.name
         if year.isdigit() and sess in SESSIONS:
-            rows.append(dict(year=int(year), race=race_key(race), session=sess, path=ev))
-    df = pd.DataFrame(rows, columns=["year", "race", "session", "path"])
-    if df.empty:
-        return df
-    df["start"] = [pd.read_csv(p, usecols=["ts"], nrows=1)["ts"].iloc[0] for p in df["path"]]
-    return df.sort_values("start").reset_index(drop=True)
+            start = _first_ts(ev)
+            if start is not None:
+                rows.append(dict(year=int(year), race=race_key(race), session=sess, path=ev, start=start))
+    df = pd.DataFrame(rows, columns=["year", "race", "session", "path", "start"])
+    return df.sort_values("start").reset_index(drop=True) if len(df) else df
 
 
 def valid_laps(path):

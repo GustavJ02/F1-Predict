@@ -31,13 +31,14 @@ SC_BUNCH = 0.9          # s, gap between cars once the field has bunched up behi
 PACE_LAPS = 8           # laps used to anchor a car's pace
 POINTS = 10
 N_SIMS = 400
+MAX_STOPS = 8          # stops per car for which the random draws are made up front
 
 
-def lap_time(model, base, comp, age, lap):
-    """Deterministic lap time. comp: array of compound indices into COMPOUNDS."""
+def lap_time(model, base, comp, age, lap, wear_mult=1.0):
+    """Deterministic lap time. comp: array of compound indices into COMPOUNDS; wear_mult scales the tyre wear (per car)."""
     off = np.array([model["offset"][c] for c in COMPOUNDS])
     wear = np.array([model["wear"][c] for c in COMPOUNDS])
-    return base + off[comp] + wear[comp] * age - model["fuel"] * lap
+    return base + off[comp] + wear[comp] * age * wear_mult - model["fuel"] * lap
 
 
 def car_states(history, priors):
@@ -89,10 +90,12 @@ def car_states(history, priors):
     return pd.DataFrame(rows), (t_lead, n0, total)
 
 
-def sample_stint(rng, km, comp_idx, current_age, shape, spread=1.0):
-    """Tyre age at the next stop, sampled from the compound's survival curve given the tyre has already lasted
-    current_age laps (inf = it never stops: the curve has mass beyond the longest observed stop)."""
+def sample_stint(km, comp_idx, current_age, u, shape, spread=1.0):
+    """Tyre age at the next stop, from the compound's survival curve given the tyre has already lasted current_age laps
+    (inf = it never stops: the curve has mass beyond the longest observed stop). `u` are the uniform draws to use (one per
+    element), so the same car and stop always get the same draw, whatever the other cars do."""
     out = np.empty(shape)
+    u = np.asarray(u, float).ravel()
     for c in np.unique(comp_idx):
         curve = km[COMPOUNDS[c]]
         ages, surv = np.asarray(curve["age"], float), np.asarray(curve["surv"], float)
@@ -103,7 +106,7 @@ def sample_stint(rng, km, comp_idx, current_age, shape, spread=1.0):
         age = current_age[sel] if np.ndim(current_age) else np.full(int(sel.sum()), current_age)
         at = np.searchsorted(ages, age, side="right") - 1                # last curve point at or below the current age
         s_at = np.where(at >= 0, surv[np.clip(at, 0, len(ages) - 1)], 1.0)   # S(age)
-        target = rng.random(int(sel.sum())) * s_at                      # draw S(X) uniformly below S(age)
+        target = u[sel] * s_at                                          # draw S(X) uniformly below S(age)
         idx = np.searchsorted(-surv, -target, side="left")               # first age whose survival is <= target
         out[sel] = np.where(idx < len(ages), np.maximum(ages[np.minimum(idx, len(ages) - 1)], age + 1), np.inf)
         if spread < 1.0:                                              # teams cover each other: pull stops towards the median
@@ -114,17 +117,13 @@ def sample_stint(rng, km, comp_idx, current_age, shape, spread=1.0):
     return out
 
 
-def next_compound(rng, trans, comp_idx, used_mask):
-    """Compound after a stop: historical switches; if the car still hasn't used two compounds, it must change."""
-    n = len(comp_idx)
-    new = np.empty(n, int)
+def next_compound(trans, comp_idx, must_change, u):
+    """Compound after a stop (one uniform draw u each): historical switches; a car that hasn't yet used two compounds must change."""
     P = np.array([[trans[a][b] + 1.0 for b in COMPOUNDS] for a in COMPOUNDS])
-    for i in range(n):
-        w = P[comp_idx[i]].copy()
-        if used_mask[i]:
-            w[comp_idx[i]] = 0.0
-        new[i] = rng.choice(len(COMPOUNDS), p=w / w.sum())
-    return new
+    W = P[comp_idx].copy()
+    W[np.arange(len(comp_idx)), comp_idx] *= np.where(must_change, 0.0, 1.0)
+    cdf = np.cumsum(W, axis=1) / W.sum(axis=1, keepdims=True)
+    return np.minimum((np.asarray(u)[:, None] > cdf).sum(axis=1), len(COMPOUNDS) - 1)
 
 
 def project(history, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
@@ -154,8 +153,17 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     median), pass_shift (added to the passing logit), friction (False = no traffic model); for a race that hasn't started:
     comp0 (n_sims x cars array of starting compound indices), gap_noise (s, random spread of the starting gaps),
     lap1_boost (multiplies the safety car rates on laps 1-2).
+
+    What-if options (see the play package):
+    plans    {tla: Plan} cars that follow a fixed strategy: Plan.stops = [(race lap of the stop, compound index), ...]; they
+             ignore the stint model and the two-compound rule. sc_react (bool) lets them take a free stop under a safety car
+             when their next planned stop is within sc_window laps (default 8).
+    tweaks   {tla: {'pace': s per lap (negative = faster), 'wear': multiplier on tyre wear, 'pit': extra seconds per stop}}
+    All the random draws that depend on what a car does (its next stint, its next compound) are drawn up front per car and
+    stop, so changing one car's strategy leaves every other car's randomness untouched: two runs with the same seed can be
+    compared directly. The finishing order of every run is returned in info['finish'] (runs x cars) for that.
     PACE_SD, LAP_NOISE, PIT_SCALE and GAP_MIN were set by a grid over the backtest's calibration (live.race.backtest_projection)."""
-    sc_on, dnf_p = opt.get("sc", True), DNF_PER_LAP if opt.get("dnf", True) else 0.0
+    sc_on, dnf_p = opt.get("sc", True), DNF_PER_LAP * opt.get("dnf_scale", 1.0) if opt.get("dnf", True) else 0.0
     pace_sd, lap_noise, gap_min = opt.get("pace_sd", PACE_SD), opt.get("lap_noise", LAP_NOISE), opt.get("gap_min", GAP_MIN)
     friction = opt.get("friction", True)
     t_lead, n0, total = meta
@@ -177,7 +185,29 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     pace = cars["base"].to_numpy(float)[None, :] + pace_sd * rng.standard_normal((S, C)) \
         * np.where(cars["known"].to_numpy(), 1.0, 3.0)[None, :]
     spread = opt.get("stint_spread", 1.0)
-    stop_age = sample_stint(rng, km, comp.ravel(), age.ravel(), S * C, spread).reshape(S, C)
+    u_init, u_stop, u_next = rng.random((S, C)), rng.random((S, C, MAX_STOPS)), rng.random((S, C, MAX_STOPS))
+    stop_age = sample_stint(km, comp.ravel(), age.ravel(), u_init.ravel(), S * C, spread).reshape(S, C)
+
+    tlas = list(cars["tla"])
+    tw = opt.get("tweaks", {})
+    unknown = (set(tw) | set(opt.get("plans", {}))) - set(tlas)
+    if unknown:
+        raise ValueError(f"not in the race: {sorted(unknown)}")
+    pace_adj = np.array([tw.get(t, {}).get("pace", 0.0) for t in tlas])
+    wear_mult = np.array([tw.get(t, {}).get("wear", 1.0) for t in tlas])[None, :]
+    pit_adj = np.array([tw.get(t, {}).get("pit", 0.0) for t in tlas])
+    pace = pace + pace_adj[None, :]
+    plans = opt.get("plans", {})
+    planned = np.array([t in plans for t in tlas])
+    width = max([len(p.stops) for p in plans.values()] + [0]) + 1
+    plan_lap, plan_comp = np.full((C, width), 10 ** 6), np.zeros((C, width), int)
+    for name, plan in plans.items():
+        for j, (lap, c) in enumerate(plan.stops):
+            plan_lap[tlas.index(name), j], plan_comp[tlas.index(name), j] = lap, c
+    stop_age = np.where(planned[None, :], np.inf, stop_age)               # planned cars don't use the stint model
+    used2 = used2 | planned[None, :]                                      # ... or the two-compound rule
+    cidx = np.arange(C)[None, :]
+    sc_react, sc_window = opt.get("sc_react", False), opt.get("sc_window", 8)
     alive = np.ones((S, C), bool)
     sc_left, vsc_left = np.zeros(S, int), np.zeros(S, int)
     if track == "SCDeployed":
@@ -199,7 +229,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         first_sc = start_sc
         had_sc |= under_sc | under_vsc
 
-        base_lt = lap_time(model, pace, comp, age, lap_no)                    # deterministic, used for pass odds
+        base_lt = lap_time(model, pace, comp, age, lap_no, wear_mult)         # deterministic, used for pass odds
         lt = base_lt + lap_noise * rng.standard_normal((S, C))
         lt = np.where(under_sc[:, None], t_lead * SC_LAP_FACTOR, np.where(under_vsc[:, None], lt * VSC_LAP_FACTOR, lt))
 
@@ -208,20 +238,28 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         due &= (k <= R - 1)
         under_any = (under_sc | under_vsc)[:, None]
         early = under_any & ((age >= 0.5 * stop_age) & (stop_age - age < R - k + 8)) & (rng.random((S, C)) < 0.8)
-        pit = (due | early) & alive
+        nxt = np.minimum(stops_done.astype(int), width - 1)
+        next_lap = plan_lap[cidx, nxt]
+        due_plan = planned[None, :] & (lap_no == next_lap)
+        early_plan = (under_any & planned[None, :] & (next_lap > lap_no) & (next_lap - lap_no <= sc_window)) if sc_react else False
+        pit = (due | early | due_plan | early_plan) & alive
         ratio = np.where(under_sc, SC_PIT_RATIO, np.where(under_vsc, VSC_PIT_RATIO, 1.0))[:, None]
-        lt = lt + np.where(pit, ratio * (pit_loss + opt.get("pit_noise", 1.2) * rng.standard_normal((S, C))), 0.0)
+        lt = lt + np.where(pit, ratio * (pit_loss + opt.get("pit_noise", 1.2) * rng.standard_normal((S, C))) + pit_adj[None, :], 0.0)
         # tyre state for the next lap
         if pit.any():
             ss, cc = np.nonzero(pit)
             cur = comp[ss, cc]
-            new = next_compound(rng, trans, cur, ~used2[ss, cc])
+            k_stop = np.minimum(stops_done[ss, cc].astype(int), MAX_STOPS - 1)
+            new = next_compound(trans, cur, ~used2[ss, cc], u_next[ss, cc, k_stop])
+            new = np.where(planned[cc], plan_comp[cc, np.minimum(stops_done[ss, cc].astype(int), width - 1)], new)
             changed = new != cur
             used2[ss, cc] = used2[ss, cc] | changed
             comp[ss, cc] = new
             age[ss, cc] = 0
             stops_done[ss, cc] += 1
-            stop_age[ss, cc] = sample_stint(rng, km, new, np.zeros(len(new)), len(new), spread)
+            k_next = np.minimum(stops_done[ss, cc].astype(int), MAX_STOPS - 1)
+            nsa = sample_stint(km, new, np.zeros(len(new)), u_stop[ss, cc, k_next], len(new), spread)
+            stop_age[ss, cc] = np.where(planned[cc], np.inf, nsa)
         age = np.where(pit, 0.0, age + 1)
         # --- retirements
         alive &= ~(rng.random((S, C)) < dnf_p)
@@ -274,7 +312,8 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         out[f"pos_{pos}"] = (finish == pos).mean(axis=0)
     out = out.sort_values(["mean_pos", "position"]).reset_index(drop=True)
     out["proj_rank"] = np.arange(1, len(out) + 1)
-    return out, dict(laps_left=R, p_sc=float(had_sc.mean()), under_sc=track in ("SCDeployed", "VSCDeployed"))
+    return out, dict(laps_left=R, p_sc=float(had_sc.mean()), under_sc=track in ("SCDeployed", "VSCDeployed"),
+                     finish=finish, tlas=tlas)
 
 
 def priors_clip():

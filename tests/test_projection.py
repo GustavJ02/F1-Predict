@@ -34,11 +34,13 @@ def test_kaplan_meier_treats_censored_stints_as_at_least_that_long():
 def test_sample_stint_is_conditional_and_can_be_never():
     rng = np.random.default_rng(0)
     km = {c: {"age": [10, 20, 30], "surv": [0.8, 0.5, 0.2]} for c in P.COMPOUNDS}
-    out = sample_stint(rng, km, np.zeros(4000, int), np.full(4000, 15.0), 4000)
+    out = sample_stint(km, np.zeros(4000, int), np.full(4000, 15.0), rng.random(4000), 4000)
     finite = out[np.isfinite(out)]
     assert finite.min() >= 16 and set(np.unique(finite)) <= {20.0, 30.0}      # lasted 15 laps already: next stop is 20 or 30
     assert np.isinf(out).mean() == pytest.approx(0.25, abs=0.03)              # S(30) / S(15) = 0.2 / 0.8 never stop
-    assert np.isinf(sample_stint(rng, km, np.zeros(10, int), np.full(10, 40.0), 10)).all()   # past the longest known stint
+    assert np.isinf(sample_stint(km, np.zeros(10, int), np.full(10, 40.0), rng.random(10), 10)).all()   # past the longest known stint
+    same = sample_stint(km, np.zeros(5, int), np.full(5, 0.0), np.full(5, 0.3), 5)
+    assert len(set(same)) == 1                                                  # the same draw gives the same stint
 
 
 def test_fit_logistic_recovers_the_passing_curve():

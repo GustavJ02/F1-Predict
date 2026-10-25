@@ -85,3 +85,14 @@ def test_no_prediction_without_enough_history(tmp_path):
     synthetic_season(tmp_path, n_weekends=3)
     fit, res, _ = predict_weekend(Tables(available(tmp_path)), 2025, "R2")
     assert fit is None and res is None
+
+
+def test_available_skips_a_session_that_has_no_events_yet(tmp_path):
+    write(tmp_path, 2025, "A", "quali", "2025-03-01T10:00", {"AAA": [90.0]})
+    live = tmp_path / "2025" / "B" / "race"                       # a session being recorded: the parser has just created the file
+    live.mkdir(parents=True)
+    (live / "events.csv").write_text("")
+    header = tmp_path / "2025" / "C" / "race"
+    header.mkdir(parents=True)
+    (header / "events.csv").write_text("ts,event,driver\n")
+    assert list(available(tmp_path)["race"]) == ["A"]

@@ -121,24 +121,38 @@ def race_laps_and_pace(av, year, race, laps=None):
     return int(total or 55), tlap
 
 
-def simulate_from_grid(grid, rel, sd, priors, circuit, total, tlap, sims=SIMS, seed=0, **opt):
-    """grid: list of tla in starting order; rel: Series tla -> pace (s/lap vs the field); sd: Series of pace uncertainty."""
-    cars = pd.DataFrame(dict(driver=grid, tla=grid, position=np.arange(1, len(grid) + 1)))
+def grid_cars(order, rel):
+    """The cars table the simulation starts from: one row per driver on the grid, in grid order."""
+    cars = pd.DataFrame(dict(driver=order, tla=order, position=np.arange(1, len(order) + 1)))
     cars["gap"] = (cars["position"] - 1) * START_GAP
     cars["comp"], cars["age"] = 1, 0.0
-    cars["base"] = rel.reindex(grid).fillna(rel.median()).to_numpy()
+    cars["base"] = rel.reindex(order).fillna(rel.median()).to_numpy()
     cars["known"], cars["needs_stop"] = True, True
+    return cars
+
+
+def start_compounds(priors, sims, n_cars, seed=0):
+    """Starting compound of every car in every simulation, drawn from what cars usually start on."""
     rng = np.random.default_rng(seed + 1)
     shares = np.array([priors["start"][c] for c in P.COMPOUNDS])
-    comp0 = rng.choice(len(P.COMPOUNDS), size=(sims, len(grid)), p=shares / shares.sum())
-    pace_sd = float(max(sd.reindex(grid).fillna(sd.max()).max() * PACE_SD_SCALE, MIN_PACE_SD))
-    defaults = dict(pace_sd=pace_sd, gap_noise=GAP_NOISE, comp0=comp0)          # (an extra first-lap safety car risk backtested worse)
+    return rng.choice(len(P.COMPOUNDS), size=(sims, n_cars), p=shares / shares.sum())
+
+
+def pace_sd_for(sd, order):
+    return float(max(sd.reindex(order).fillna(sd.max()).max() * PACE_SD_SCALE, MIN_PACE_SD))
+
+
+def simulate_from_grid(grid, rel, sd, priors, circuit, total, tlap, sims=SIMS, seed=0, **opt):
+    """grid: list of tla in starting order; rel: Series tla -> pace (s/lap vs the field); sd: Series of pace uncertainty."""
+    cars = grid_cars(grid, rel)
+    defaults = dict(pace_sd=pace_sd_for(sd, grid), gap_noise=GAP_NOISE,
+                    comp0=start_compounds(priors, sims, len(grid), seed))      # (an extra first-lap safety car risk backtested worse)
     return simulate(cars, (tlap, 0, total), "AllClear", priors, circuit, sims, seed, **{**defaults, **opt})
 
 
-def predict_weekend(archive, av, priors, year, race, grid=None, laps=None, sims=SIMS, seed=0, before=None, use_rating=True,
-                    blend=GRID_BLEND, **opt):
-    """-> (DataFrame per driver with pos_1..pos_N, info) or (None, reason). `before`: only use races started before this."""
+def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, before=None, use_rating=True):
+    """Everything the race simulation needs for a weekend, or (None, reason): a dict with order (grid, driver codes),
+    rel / sd (pace and its uncertainty per driver), total laps, typical lap time, circuit, and the pace model fit."""
     q = quali_table(av, year, race)
     if q is None:
         return None, f"no qualifying data for {year} {race}"
@@ -156,12 +170,22 @@ def predict_weekend(archive, av, priors, year, race, grid=None, laps=None, sims=
     order = grid or list(q.sort_values("rank").index)
     order = [d for d in order if d in rel.index]
     total, tlap = race_laps_and_pace(av, year, race, laps)
-    out, info = simulate_from_grid(order, rel, sd, priors, P.circuit_of(year, race), total, tlap, sims, seed, **opt)
+    return dict(order=order, rel=rel, sd=sd, total=total, tlap=tlap, circuit=P.circuit_of(year, race), model=model,
+                n_train=len(rows), rated=int(rt["rating"].notna().sum()) if len(rt) else 0, before=before), None
+
+
+def predict_weekend(archive, av, priors, year, race, grid=None, laps=None, sims=SIMS, seed=0, before=None, use_rating=True,
+                    blend=GRID_BLEND, **opt):
+    """-> (DataFrame per driver with pos_1..pos_N, info) or (None, reason). `before`: only use races started before this."""
+    w, why = prepare_weekend(archive, av, priors, year, race, grid, laps, before, use_rating)
+    if w is None:
+        return None, why
+    out, info = simulate_from_grid(w["order"], w["rel"], w["sd"], priors, w["circuit"], w["total"], w["tlap"], sims, seed, **opt)
     if blend:
-        out = blend_with_grid(out, order, finishing_table(archive, av, before), blend)
-    out["grid"] = out["tla"].map({d: i + 1 for i, d in enumerate(order)})
-    out["rel_pace"] = out["tla"].map(rel)
-    info.update(total_laps=total, pace_model=model, n_train=len(rows), rated=int(rt["rating"].notna().sum()) if len(rt) else 0)
+        out = blend_with_grid(out, w["order"], finishing_table(archive, av, w["before"]), blend)
+    out["grid"] = out["tla"].map({d: i + 1 for i, d in enumerate(w["order"])})
+    out["rel_pace"] = out["tla"].map(w["rel"])
+    info.update(total_laps=w["total"], pace_model=w["model"], n_train=w["n_train"], rated=w["rated"])
     return out, info
 
 

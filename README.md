@@ -37,6 +37,11 @@ pre/                 predictions made BEFORE a session, from past sessions
                      expected grid), backtest.py (score it on every past quali, with ablations)
   race/              pace.py (race pace per driver and season rating), predict_result.py (finishing distribution per driver
                      from the grid), backtest.py (score it on every past race)
+play/                strategy playground: try tyre strategies and tweaks, and compute the best strategy with pit windows
+  strategy.py        a strategy as text (M-18-H-40-S) and its rules
+  scenario.py        a race to experiment on (pre-race from the grid, or live from the current state) and paired comparisons
+  playground.py      try your own strategies / tweaks for drivers (CLI)
+  optimize.py        search for the best strategy of a driver, with pit windows (CLI)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
 data/                gitignored
   <year>/<race>/<session>/
@@ -197,6 +202,44 @@ distribution: the probability it gave the real finishing position averaged exp(-
 simulation alone: -2.51), and the chances are close to calibrated (points chances almost exactly; podium chances somewhat
 underconfident at the top: cars given 68% got a podium 82% of the time). Not modelled: weather, grid penalties (use
 --grid), team strategy, the first-lap chaos beyond a random spread of the starting gaps.
+
+## Strategy playground (play)
+
+Try a different tyre strategy, or tweak a driver's pace, and see what it does to the finishing positions. Both commands work
+before the race (from the grid) and during it (from the current state of the race being recorded):
+
+```bash
+# try your own ideas (compound-lap-compound...: M-25-H = mediums, stop on lap 25, hards)
+python -m play.playground pre 2026 Austin --plan HAM=M-25-H --set HAM.pace=-0.1 --show VER
+python -m play.playground pre 2026 Austin --try HAM=S-24-H --try HAM=M-25-H --try HAM=S-12-M-34-H   # one by one
+python -m play.playground pre 2026 Austin --move HAM=2 --set sc=2 --set pass_shift=-1
+python -m play.playground live 2026 Austin race --plan HAM=M-38-H --sc-react
+
+# let it find the best strategy and its pit window (about 25 s before the race, a few seconds during it)
+python -m play.optimize pre 2026 Austin HAM --objective points            # points | win | podium | position
+python -m play.optimize live 2026 Austin race HAM VER --stops 1 2
+```
+
+`--set` takes `DRV.pace=-0.1` (s per lap, negative = faster), `DRV.wear=0.8` (tyre wear x0.8), `DRV.pit=1.5` (extra seconds per
+stop), `sc=2` (safety car rate x2), `pass_shift=-1`, `pit_scale=1.2`, `dnf=2`, `lap_noise=0.3`; `--move DRV=N` puts a driver on
+grid slot N; `--sc-react` lets planned cars take a free stop under a safety car.
+
+How it works: `play/scenario.py` runs the race simulation of `live/race/projection.py` with fixed plans for the drivers you
+name (everyone else keeps the usual stochastic stop plans) and per-driver tweaks. All runs use the same random draws, and the
+draws that depend on what a car does (its next stint, its next compound) are made up front per car and stop, so changing one
+car's strategy leaves every other car's randomness alone: the *difference* between two runs is the effect of the change, not
+luck, and is printed with its standard error (a change to a car 40 s behind leaves the cars ahead exactly as they were; a test
+checks that). The optimizer simulates every compound sequence with one or two stops over a grid of stop laps, refines around
+the best, re-simulates the finalists with 3000 runs, and gives the pit window of each stop: the laps whose result is within a
+tolerance of the best. Plans with a stint longer than the tyre has ever lasted are dropped (the lap model has no tyre cliff),
+and the "tyre life" column shows how routine the longest stint is. A race under way also considers not stopping again if the
+driver already used two compounds.
+
+Read the results with these limits in mind: the other cars don't react to your plan (a rival would cover an undercut), the plan is
+followed exactly, the numbers are only as good as the pace, tyre and passing assumptions in `live/race/priors.json`, and chances
+here come from the simulation alone (no blend with the grid table that `pre.race.predict_result` applies, which would shrink the
+effects you are looking for), so they are more spread out than that table. A strategy that is better by a few hundredths of a
+place is a tie. Strategies that look implausibly good usually exploit the model's lack of a tyre cliff or of strategic reaction.
 
 ## Testing without a live session
 
