@@ -4,6 +4,11 @@ Usage (from the repo root, in a second terminal next to ./run_session.sh; works 
     python -m live.race.watch 2026 Singapore race
     python -m live.race.watch 2026 Singapore replay --once      # print one frame and exit
 
+Delay: a TV broadcast is usually behind the live timing. --delay SECONDS shows the race as it was that long ago (standings,
+gaps, battles, projection and the lap position line), and the keys ] [ (1 s) and } { (10 s) change it while you watch, so you can
+nudge it until the screen matches the picture; 0 goes back to live. The delay is remembered for next time. The runner and the
+recording are not delayed: only what is shown.
+
 Reads events.csv (standings, gaps, tyres), predictions.csv (from live.race.model) and, if f1live.telemetry is
 running, telemetry.csv (where each car is on track) of the session. The screen redraws whenever a file changes;
 Ctrl-C quits.
@@ -15,6 +20,7 @@ Bottom strip: one line for the lap with a dot per car at its position along the 
 seen (live.race.track). Without telemetry the positions are estimated from lap timing.
 """
 import argparse, os, sys, time
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from rich.console import Console, Group
@@ -198,7 +204,7 @@ def projection_panel(preds, history=None, max_rows=22):
     return Group(Text(note, style="dim"), t)
 
 
-def header(history, preds, sess):
+def header(history, preds, sess, delay=0.0):
     lap = history[history["race_lap"].notna()].tail(1)
     race_lap = int(lap["race_lap"].iloc[0]) if len(lap) else None
     total = int(lap["total_laps"].iloc[0]) if len(lap) and pd.notna(lap["total_laps"].iloc[0]) else None
@@ -215,6 +221,10 @@ def header(history, preds, sess):
         t.append("  ")
         t.append(" RAIN ", style="bold blue reverse")
     t.append(f"    {history['ts'].max():%H:%M:%S} UTC", style="dim")
+    if delay:
+        t.append("   ")
+        t.append(f" DELAY {delay:g} s ", style="bold cyan reverse")
+        t.append("  [ ] 1 s   { } 10 s   0 live", style="dim")
     return t
 
 
@@ -302,6 +312,7 @@ class Feed:
     """Follows the session's files and keeps what the dashboard needs: events, the track reference and each car's
     latest position."""
     TEL_STALE = 15          # s of event time after which telemetry no longer counts as live
+    TRAIL_S = 300           # how far back positions are kept: the longest delay the viewer can show
 
     def __init__(self, sess):
         self.sess = sess
@@ -310,6 +321,7 @@ class Feed:
         self.history = None
         self.buffer = []                  # telemetry kept only until the reference lap exists
         self.pos = {}                     # driver -> (ts, x, y)
+        self.trail = {}                   # driver -> [(ts, x, y), ...] the last TRAIL_S seconds, to show the race as it was
         self.tracker = None
         self.corners = load_corners(sess.dir.parent / "corners.csv")
         ref = load_reference(sess.dir.parent / "track.csv")
@@ -325,11 +337,19 @@ class Feed:
             self.history = new if self.history is None else pd.concat([self.history, new], ignore_index=True)
         fresh = self.tel.read()
         if isinstance(fresh, str):
-            self.pos, self.buffer = {}, []
+            self.pos, self.trail, self.buffer = {}, {}, []
         elif fresh is not None:
             ok = fresh.dropna(subset=["x", "y"])
             for drv, r in ok.groupby("driver").tail(1).set_index("driver").iterrows():
                 self.pos[drv] = (r["ts"], r["x"], r["y"])
+            for drv, g in ok.groupby("driver"):
+                self.trail.setdefault(drv, []).extend(zip(g["ts"], g["x"], g["y"]))
+            newest = ok["ts"].max() if len(ok) else None
+            if newest is not None:
+                cutoff = newest - pd.Timedelta(self.TRAIL_S, unit="s")
+                for drv, samples in self.trail.items():
+                    if samples and samples[0][0] < cutoff:
+                        self.trail[drv] = [s for s in samples if s[0] >= cutoff]
             if self.tracker is None:
                 self.buffer.append(ok[["ts", "driver", "x", "y"]])
         if self.tracker is None and self.buffer and self.history is not None and time.time() - self._last_try > 10:
@@ -338,18 +358,40 @@ class Feed:
             if ref is not None:
                 self.tracker, self.buffer = TrackProgress(ref), []
 
-    def sectors(self):
+    def sectors(self, history=None):
         """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""
-        return None if self.history is None else sector_fractions(self.history)
+        h = self.history if history is None else history
+        return None if h is None else sector_fractions(h)
 
-    def progress(self):
-        """-> ({driver: progress 0-1}, 'telemetry' | 'timing' | None)."""
-        h = self.history
+    def head(self):
+        """The newest moment we have data for (event time), or None."""
+        stamps = [self.history["ts"].max()] if self.history is not None and len(self.history) else []
+        stamps += [samples[-1][0] for samples in self.trail.values() if samples]
+        return max(stamps) if stamps else None
+
+    def position_at(self, driver, at):
+        """(ts, x, y) of the car's last sample at or before `at`, or None."""
+        best = None
+        for sample in self.trail.get(driver, ()):
+            if sample[0] <= at:
+                best = sample
+            else:
+                break
+        return best
+
+    def progress(self, history=None, at=None):
+        """-> ({driver: progress 0-1}, 'telemetry' | 'timing' | None), as of event time `at` (default: now) from `history`
+        (default: everything so far)."""
+        h = self.history if history is None else history
         if h is None or h.empty:
             return {}, None
-        now = h["ts"].max()
-        if self.tracker is not None and self.pos:
-            live = {d: p for d, p in self.pos.items() if (now - p[0]).total_seconds() <= self.TEL_STALE}
+        now = h["ts"].max() if at is None else at
+        if at is None:
+            positions = self.pos
+        else:                                      # as it was: the latest sample of each car before `at`
+            positions = {d: s for d in self.trail if (s := self.position_at(d, at)) is not None}
+        if self.tracker is not None and positions:
+            live = {d: p for d, p in positions.items() if (now - p[0]).total_seconds() <= self.TEL_STALE}
             if live:
                 return {d: self.tracker.progress(d, x, y) for d, (_, x, y) in live.items()}, "telemetry"
         lat = latest(h)
@@ -366,10 +408,11 @@ def prepare_telemetry(df):
     return df
 
 
-def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None):
+def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0):
     """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
     progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line, with its corners and
-    sector boundaries (Feed.corners, Feed.sectors()).
+    sector boundaries (Feed.corners, Feed.sectors()). delay (seconds) is only shown in the header: the caller passes the
+    history, predictions and progress as they were that long ago (see delayed_view).
     A wide screen gets three columns (standings | projected finish | battles); otherwise the right column is split."""
     layout = Layout()
     layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 4))
@@ -386,7 +429,7 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
     else:
         layout["body"].split_row(Layout(stand_panel, name="left", ratio=3), Layout(name="right", ratio=2))
         layout["right"].split_column(Layout(proj_panel, name="proj", ratio=3), Layout(battle_panel, name="battles", ratio=2))
-    layout["head"].update(header(history, preds, sess) if ok else Text(f" {sess}  waiting ..."))
+    layout["head"].update(header(history, preds, sess, delay) if ok else Text(f" {sess}  waiting ... (delay {delay:g} s)"))
     prog, mode = progress or ({}, None)
     cars = track_cars(history, prog) if ok and prog else []
     note = {"telemetry": "from car telemetry", "timing": "estimated from lap timing"}.get(mode, "waiting for positions")
@@ -396,38 +439,123 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
     return layout
 
 
+def delayed_view(feed, preds, delay):
+    """The race as it was `delay` seconds ago, for matching a delayed broadcast: events, predictions and car positions up to
+    that moment. -> dict(at, history, preds, progress, sectors); history is None until there is data that old."""
+    head = feed.head()
+    if head is None or feed.history is None:
+        return dict(at=None, history=None, preds=preds, progress=({}, None), sectors=None)
+    at = head - pd.Timedelta(float(delay), unit="s")
+    hist = feed.history[feed.history["ts"] <= at] if delay else feed.history
+    if hist.empty:
+        return dict(at=at, history=None, preds=None, progress=({}, None), sectors=None)
+    if preds is not None and delay:
+        preds = preds[preds["ts"] <= at]
+        preds = preds if len(preds) else None
+    return dict(at=at, history=hist, preds=preds, progress=feed.progress(hist, at), sectors=feed.sectors(hist))
+
+
+STEPS = {"]": 1.0, "[": -1.0, "}": 10.0, "{": -10.0}
+
+
+def adjust_delay(delay, key, maximum=Feed.TRAIL_S):
+    """New delay in seconds after a key press: ] [ change it by 1 s, } { by 10 s, 0 goes back to live. Between 0 and `maximum`."""
+    if key == "0":
+        return 0.0
+    return min(max(delay + STEPS.get(key, 0.0), 0.0), float(maximum))
+
+
+def delay_file(data_dir):
+    return Path(data_dir) / ".watch_delay"
+
+
+def load_delay(data_dir):
+    """The delay used last time (broadcast delay rarely changes), 0 if none was saved."""
+    try:
+        return min(max(float(delay_file(data_dir).read_text().strip()), 0.0), float(Feed.TRAIL_S))
+    except (OSError, ValueError):
+        return 0.0
+
+
+def save_delay(data_dir, delay):
+    try:
+        delay_file(data_dir).write_text(f"{delay:g}\n")
+    except OSError:
+        pass
+
+
+class Keys:
+    """Read single key presses without waiting for Enter (a no-op unless stdin is a terminal)."""
+    def __init__(self):
+        self.fd = sys.stdin.fileno() if sys.stdin.isatty() else None
+
+    def __enter__(self):
+        if self.fd is not None:
+            import termios, tty
+            self.old = termios.tcgetattr(self.fd)
+            tty.setcbreak(self.fd)                 # Ctrl-C still works
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            import termios
+            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
+
+    def read(self, timeout):
+        """The keys pressed within `timeout` seconds (waits that long if none), as a string."""
+        if self.fd is None:
+            time.sleep(timeout)
+            return ""
+        import select
+        if select.select([sys.stdin], [], [], timeout)[0]:
+            return os.read(self.fd, 32).decode(errors="ignore")
+        return ""
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_session_args(ap)
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between file checks")
+    ap.add_argument("--delay", type=float, help="show the race as it was this many seconds ago, to match a delayed broadcast "
+                                                 "(default: what you used last time)")
     ap.add_argument("--once", action="store_true", help="print one frame and exit")
     args = ap.parse_args()
     sess = session_from_args(args)
     feed = Feed(sess)
+    delay = min(max(args.delay, 0.0), float(Feed.TRAIL_S)) if args.delay is not None else load_delay(sess.data_dir)
 
-    def frame(height, width):
-        return render(feed.history, read(sess.predictions), str(sess), height, feed.progress(), width, feed.corners,
-                      feed.sectors())
+    def frame(height, width, preds_all):
+        v = delayed_view(feed, preds_all, delay)
+        if v["history"] is None:
+            return Text(f" {sess}: no data from {delay:g} s ago yet" if delay else f" {sess}: waiting for events.csv ...")
+        return render(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay)
 
     if args.once or not sys.stdout.isatty():
         feed.poll()
         console = Console(width=args.once and 170 or None, height=50 if args.once else None)
-        console.print(frame(console.height, console.width) if feed.history is not None else Text(f"{sess}: no events yet"))
+        console.print(frame(console.height, console.width, read(sess.predictions)) if feed.history is not None
+                      else Text(f"{sess}: no events yet"))
         return
     console = Console()
-    stamp = None
+    stamp, drawn_at, drawn_delay = None, None, None
     from rich.live import Live
-    with Live(console=console, screen=True, auto_refresh=False) as live:
+    with Live(console=console, screen=True, auto_refresh=False) as live, Keys() as keys:
         try:
             while True:
                 feed.poll()
+                for key in keys.read(args.interval):
+                    new = adjust_delay(delay, key)
+                    if new != delay:
+                        delay = new
+                        save_delay(sess.data_dir, delay)
                 now = tuple(os.stat(p).st_mtime_ns if p.exists() else None
                             for p in (sess.events, sess.predictions, sess.telemetry))
-                if now != stamp or console.size != getattr(live, "_size", None):
-                    stamp, live._size = now, console.size
-                    live.update(frame(console.height, console.width) if feed.history is not None
+                head = feed.head()
+                moved = head is not None and (drawn_at is None or (head - drawn_at).total_seconds() >= 0.5)
+                if now != stamp or moved or delay != drawn_delay or console.size != getattr(live, "_size", None):
+                    stamp, drawn_at, drawn_delay, live._size = now, head, delay, console.size
+                    live.update(frame(console.height, console.width, read(sess.predictions)) if feed.history is not None
                                 else Text(f" {sess}: waiting for events.csv ..."), refresh=True)
-                time.sleep(args.interval)
         except KeyboardInterrupt:
             pass
 

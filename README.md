@@ -77,6 +77,14 @@ Panels (a wide screen shows three columns, a narrower one stacks the last two):
   `python -m live.race.track 2026 Austin quali` writes from any session's telemetry (so it can be ready before the race;
   sync it with `--what track`). Without telemetry the positions are estimated from lap timing and the panel says so.
 
+**Matching a delayed broadcast.** A TV picture is usually some seconds behind the live timing, so the lap-position line (and the
+standings and gaps) run ahead of what you see. `python -m live.race.watch 2026 Austin race --delay 45` shows the race as it was 45 s
+ago (standings, gaps, battles, projection and the lap position line, which uses the recorded car positions of that moment). While it
+is running, `]` / `[` add and take off 1 s, `}` / `{` 10 s and `0` goes back to live; the header shows `DELAY 45 s`. To sync it, watch a
+car cross the line on TV and press the keys until the lap counter (or the car's dot) on the screen moves at the same moment. The
+delay is remembered between runs (`data/.watch_delay`; an explicit `--delay` overrides it), can be 0-300 s, and only changes what is
+shown: the recording, parser and runner stay live. Until the first data of that age exists the screen says so.
+
 **Battle prediction** (`live/race/battles.py`): a driver's pace is the median of the last 4 clean racing laps on the
 current stint (no in/out laps, green flag only, not lap 1-2); with fewer than 3 clean laps there is no pace and the model
 says "collecting pace data". For each pair of neighbours the gap closes by the pace difference per lap, so
