@@ -375,3 +375,14 @@ Backtest, 42 qualis, one prediction every 30 s, same snapshots: mean absolute er
 -> 0.348 s, 90% interval coverage 51% -> 66%; most of the gain is early in a part (>7 min left: 1.36 s -> 0.67 s). The
 prior also gives a prediction before anyone has set a time (Q2: 0.31 s error; Q1: 1.3 s, biased fast by ~0.9 s). The
 pull of the prior (`live/quali/prior.py`) was picked using both years, so these numbers are fitted, not held out.
+
+## License and disclaimer
+
+The code is released under the [MIT License](LICENSE).
+
+This is an independent hobby project. It is not affiliated with, endorsed by or associated with Formula 1, the FIA or any team.
+F1, FORMULA ONE, FORMULA 1 and related marks are trademarks of Formula One Licensing BV. The timing data it works on belongs to
+its owners and is not part of this repository (`data/` is not committed): recording a live session needs your own F1TV
+subscription, and downloading or using the data is subject to F1's terms. `live/race/priors.json` holds only aggregate
+statistics (tyre wear, stint lengths, passing rates) estimated from past sessions. The predictions are statistical models, not
+advice, and come with no guarantee.
