@@ -10,7 +10,7 @@ The central store is the master copy; data/ on this machine is a working copy. U
     python -m f1live.sync push 2026 Austin quali          # one session (what run_session.sh does while recording)
 
 Optional positional year / race / session narrow it down (omitted = all). --what picks file types:
-events, telemetry, raw, raw_telemetry, predictions, all (default: events for pull, all for push/status).
+events, telemetry, raw, raw_telemetry, predictions, track, all (default: events for pull, all for push/status).
 Add --dry-run to see what would be transferred.
 
 Safety:
@@ -28,6 +28,7 @@ from f1live.paths import DATA, REMOTE, folder_name
 
 KINDS = {"events": ["events.csv"], "telemetry": ["telemetry.csv"], "raw": ["raw.txt"],
          "raw_telemetry": ["raw_telemetry.txt"], "predictions": ["predictions.csv"]}
+RACE_LEVEL = {"track": "track.csv"}          # lives in <year>/<race>/, not in a session folder (see live.race.track)
 SSH = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 VANISHED = 24      # rsync's "some source files vanished", normal while a file is being rewritten
 
@@ -35,9 +36,10 @@ VANISHED = 24      # rsync's "some source files vanished", normal while a file i
 def filters(year, race, session, kinds):
     """rsync filter rules: only <year>/<race>/<session>/<file> for the wanted file types ('*' = any)."""
     y, r, s = year or "*", folder_name(race) if race else "*", folder_name(session) if session else "*"
-    names = [n for k in kinds for n in KINDS[k]]
+    names = [n for k in kinds if k in KINDS for n in KINDS[k]]
     rules = ["--exclude=*.tmp", f"--include=/{y}/", f"--include=/{y}/{r}/", f"--include=/{y}/{r}/{s}/"]
     rules += [f"--include=/{y}/{r}/{s}/{n}" for n in names]
+    rules += [f"--include=/{y}/{r}/{RACE_LEVEL[k]}" for k in kinds if k in RACE_LEVEL]
     return rules + ["--exclude=*"]
 
 
@@ -45,7 +47,7 @@ def command(direction, remote, data, rules, dry_run=False, extra=()):
     remote = remote.rstrip("/") + "/"
     src, dst, mode = (remote, str(data) + "/", "--ignore-existing") if direction == "pull" else \
                      (str(data) + "/", remote, "--append-verify")
-    cmd = ["rsync", "-rlt", "--partial", mode, *extra]
+    cmd = ["rsync", "-rlt", "--partial", "--prune-empty-dirs", mode, *extra]
     if ":" in remote:
         cmd += ["-e", SSH]
     if dry_run:
@@ -109,13 +111,13 @@ def main(argv=None):
         p.add_argument("year", nargs="?")
         p.add_argument("race", nargs="?", help="folder name, e.g. Austin or United_States")
         p.add_argument("session", nargs="?", help="folder name, e.g. quali, race, fp1")
-        p.add_argument("--what", nargs="+", choices=[*KINDS, "all"], default=["events"] if name == "pull" else ["all"])
+        p.add_argument("--what", nargs="+", choices=[*KINDS, *RACE_LEVEL, "all"], default=["events"] if name == "pull" else ["all"])
         p.add_argument("--remote", default=REMOTE, help=f"default {REMOTE}")
         p.add_argument("--data-dir", default=DATA, type=Path)
         p.add_argument("--dry-run", action="store_true")
         p.add_argument("--quiet", action="store_true", help="print errors only")
     a = ap.parse_args(argv)
-    kinds = list(KINDS) if "all" in a.what else a.what
+    kinds = [*KINDS, *RACE_LEVEL] if "all" in a.what else a.what
     if a.cmd == "status":
         return status(a.remote, a.data_dir, a.year, a.race, a.session, kinds)
     return run(a.cmd, a.remote, a.data_dir, a.year, a.race, a.session, kinds, a.dry_run, a.quiet)[0]

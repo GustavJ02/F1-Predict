@@ -70,6 +70,14 @@ apart, when it predicts contact within 8 laps it is right 87% of the time (about
 within 8 laps), with a typical timing error of about 2 laps. It finds only about 30% of the battles that happen: contact
 caused by tyre wear, strategy or traffic isn't visible from lap times. A lap-time trend and longer windows didn't help.
 
+Bottom strip: **lap position**, one line for the lap (start/finish at both ends) with a dot and the driver code for each
+car at its position along the lap, so the gaps between cars show up as distance on the line (the leader is a diamond;
+close cars get their labels staggered above). Positions come from car telemetry projected onto a reference lap
+(`live/race/track.py`), built from the race's own first clean lap, or loaded at once from
+`data/<year>/<race>/track.csv`, which `python -m live.race.track 2026 Austin quali` writes from any session's telemetry
+(so it can be ready before the race; sync it with `--what track`). Without telemetry the positions are estimated from
+lap timing (time since the car's last crossing / its pace) and the panel says so.
+
 The standings come from the most recent row of each driver in `events.csv`; `run_session.sh` writes a snapshot of all
 drivers every 5 s (`SNAPSHOT`), which keeps them consistent. A finished session parsed without `--snapshot`
 can show duplicate positions.

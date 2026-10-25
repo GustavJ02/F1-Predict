@@ -4,10 +4,15 @@ Usage (from the repo root, in a second terminal next to ./run_session.sh; works 
     python -m live.race.watch 2026 Singapore race
     python -m live.race.watch 2026 Singapore replay --once      # print one frame and exit
 
-Reads events.csv (standings, gaps, tyres) and predictions.csv (from live.race.model) of the session. The screen
-redraws whenever either file changes; Ctrl-C quits.
+Reads events.csv (standings, gaps, tyres), predictions.csv (from live.race.model) and, if f1live.telemetry is
+running, telemetry.csv (where each car is on track) of the session. The screen redraws whenever a file changes;
+Ctrl-C quits.
+
+Bottom strip: one line for the lap with a dot per car at its position along the lap, so the gaps between cars can be
+seen (live.race.track). Without telemetry the positions are estimated from lap timing.
 """
 import argparse, os, sys, time
+import numpy as np
 import pandas as pd
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -20,12 +25,18 @@ from f1live.paths import add_session_args, session_from_args
 from f1live.tail import CsvTail
 from f1live.watch import read
 from live.race.battles import HORIZON, THRESH, latest
+from live.race.pace import driver_pace
+from live.race.track import TrackProgress, build_reference, load_reference, timing_progress
 
 TYRE = {"SOFT": ("S", "red"), "MEDIUM": ("M", "yellow"), "HARD": ("H", "white"), "INTERMEDIATE": ("I", "green"),
         "WET": ("W", "blue")}
 TRACK = {"AllClear": ("GREEN", "green"), "Yellow": ("YELLOW", "yellow"), "SCDeployed": ("SAFETY CAR", "bold yellow"),
          "VSCDeployed": ("VSC", "yellow"), "VSCEnding": ("VSC ENDING", "yellow"), "Red": ("RED FLAG", "bold red")}
 MAX_BATTLES = 8
+TEAM_COLOUR = {"Red Bull Racing": "#3671C6", "Ferrari": "#E8002D", "Mercedes": "#27F4D2", "McLaren": "#FF8000",
+               "Aston Martin": "#229971", "Alpine": "#FF87BC", "Williams": "#64C4FF", "Racing Bulls": "#6692FF",
+               "Kick Sauber": "#52E252", "Audi": "#F50537", "Haas F1 Team": "#B6BABD", "Cadillac": "#C8AA4B"}
+TRACK_ROWS = 4          # rows of driver labels above the track line
 
 
 def lap_time(s):
@@ -143,16 +154,145 @@ def header(history, preds, sess):
     return t
 
 
-def render(history, preds, sess="", height=40):
-    """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None)."""
+class TrackLine:
+    """One line for the lap (start/finish at both ends) with a dot per car and its code above, staggered over
+    TRACK_ROWS rows so cars close together stay readable (a label that can't be placed is dropped, its dot stays)."""
+    def __init__(self, cars):
+        self.cars = cars            # [(code, progress 0-1, style, is_leader)]
+
+    def __rich_console__(self, console, options):
+        W = max(options.max_width, 20)
+        H = TRACK_ROWS + 2
+        grid = [[(" ", "")] * W for _ in range(H)]
+        line = TRACK_ROWS
+        grid[line] = [("─", "dim")] * W
+        grid[line][0], grid[line][-1] = ("├", "dim"), ("┤", "dim")
+        for frac in (0.25, 0.5, 0.75):
+            grid[line][int(frac * (W - 1))] = ("┼", "dim")
+        for frac, label in ((0, "S/F"), (0.25, "25%"), (0.5, "50%"), (0.75, "75%")):
+            x = int(frac * (W - 1))
+            for k, ch in enumerate(label):
+                if x + k < W:
+                    grid[line + 1][x + k] = (ch, "dim")
+        for k, ch in enumerate("S/F"):
+            grid[line + 1][W - 3 + k] = (ch, "dim")
+        row_end = [-2] * TRACK_ROWS
+        placed = []
+        for code, frac, style, leader in sorted(self.cars, key=lambda c: c[1]):
+            x = min(int(frac * (W - 1)), W - 1)
+            lx = min(x, W - len(code))
+            r = next((r for r in range(TRACK_ROWS) if lx > row_end[r]), None)
+            if r is not None:
+                row_end[r] = lx + len(code)
+            placed.append((code, x, lx, r, style, leader))
+        for code, x, lx, r, style, leader in placed:               # stems first, labels and dots over them
+            for rr in range(0 if r is None else 0, 0 if r is None else r):
+                if grid[line - 1 - rr][x][0] == " ":
+                    grid[line - 1 - rr][x] = ("│", "dim")
+        for code, x, lx, r, style, leader in placed:
+            grid[line][x] = ("◆" if leader else "●", f"bold {style}" if style else "bold")
+            if r is not None:
+                for k, ch in enumerate(code):
+                    grid[line - 1 - r][lx + k] = (ch, f"bold {style}" if style else "bold")
+        for row in grid:
+            t = Text()
+            for ch, st in row:
+                t.append(ch, style=st or None)
+            yield t
+
+
+def track_cars(history, progress):
+    """[(code, progress, colour, is_leader)] for the cars still running that have a progress."""
+    lat = latest(history)
+    cars = []
+    for drv, frac in progress.items():
+        if drv not in lat.index or lat.loc[drv, "out"]:
+            continue
+        r = lat.loc[drv]
+        cars.append((str(r["tla"]), frac, TEAM_COLOUR.get(r.get("team"), "white"), r["position"] == 1))
+    return cars
+
+
+class Feed:
+    """Follows the session's files and keeps what the dashboard needs: events, the track reference and each car's
+    latest position."""
+    TEL_STALE = 15          # s of event time after which telemetry no longer counts as live
+
+    def __init__(self, sess):
+        self.sess = sess
+        self.events = CsvTail(sess.events, prepare)
+        self.tel = CsvTail(sess.telemetry, prepare_telemetry)
+        self.history = None
+        self.buffer = []                  # telemetry kept only until the reference lap exists
+        self.pos = {}                     # driver -> (ts, x, y)
+        self.tracker = None
+        ref = load_reference(sess.dir.parent / "track.csv")
+        if ref is not None:
+            self.tracker = TrackProgress(ref)
+        self._last_try = 0.0
+
+    def poll(self):
+        new = self.events.read()
+        if isinstance(new, str):
+            self.history = None
+        elif new is not None:
+            self.history = new if self.history is None else pd.concat([self.history, new], ignore_index=True)
+        fresh = self.tel.read()
+        if isinstance(fresh, str):
+            self.pos, self.buffer = {}, []
+        elif fresh is not None:
+            ok = fresh.dropna(subset=["x", "y"])
+            for drv, r in ok.groupby("driver").tail(1).set_index("driver").iterrows():
+                self.pos[drv] = (r["ts"], r["x"], r["y"])
+            if self.tracker is None:
+                self.buffer.append(ok[["ts", "driver", "x", "y"]])
+        if self.tracker is None and self.buffer and self.history is not None and time.time() - self._last_try > 10:
+            self._last_try = time.time()
+            ref = build_reference(pd.concat(self.buffer, ignore_index=True), self.history)
+            if ref is not None:
+                self.tracker, self.buffer = TrackProgress(ref), []
+
+    def progress(self):
+        """-> ({driver: progress 0-1}, 'telemetry' | 'timing' | None)."""
+        h = self.history
+        if h is None or h.empty:
+            return {}, None
+        now = h["ts"].max()
+        if self.tracker is not None and self.pos:
+            live = {d: p for d, p in self.pos.items() if (now - p[0]).total_seconds() <= self.TEL_STALE}
+            if live:
+                return {d: self.tracker.progress(d, x, y) for d, (_, x, y) in live.items()}, "telemetry"
+        lat = latest(h)
+        if lat.empty:
+            return {}, None
+        pace = driver_pace(h)["pace_s"]
+        last = h[h["event"] == "lap"].groupby("driver")["lap_time_s"].last()
+        return timing_progress(lat, now, pace.where(pace.notna(), last)), "timing"
+
+
+def prepare_telemetry(df):
+    df["ts"] = pd.to_datetime(df["ts"], format="ISO8601")
+    df["driver"] = df["driver"].astype(int).astype(str)
+    return df
+
+
+def render(history, preds, sess="", height=40, progress=None):
+    """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
+    progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line."""
     layout = Layout()
-    layout.split_column(Layout(name="head", size=1), Layout(name="body"))
+    layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 4))
     layout["body"].split_row(Layout(name="left", ratio=3), Layout(name="right", ratio=2))
     layout["head"].update(header(history, preds, sess) if history is not None and len(history) else Text(f" {sess}  waiting ..."))
     layout["left"].update(Panel(standings_table(history) if history is not None and len(history) else Text("waiting ..."),
                                 title="Standings", title_align="left"))
     layout["right"].update(Panel(battles_panel(preds, max_lines=max(height - 6, 8)), title="Battles (pace-based)", title_align="left",
                                  subtitle=f"within {THRESH:.0f} s, next {HORIZON} laps", subtitle_align="left"))
+    prog, mode = progress or ({}, None)
+    cars = track_cars(history, prog) if history is not None and len(history) and prog else []
+    note = {"telemetry": "from car telemetry", "timing": "estimated from lap timing"}.get(mode, "waiting for positions")
+    layout["foot"].update(Panel(TrackLine(cars) if cars else Text("no positions yet", style="dim"),
+                                title=f"Lap position ({note})", title_align="left",
+                                subtitle="◆ leader", subtitle_align="right"))
     return layout
 
 
@@ -163,21 +303,15 @@ def main():
     ap.add_argument("--once", action="store_true", help="print one frame and exit")
     args = ap.parse_args()
     sess = session_from_args(args)
-    tail, history = CsvTail(sess.events, prepare), None
+    feed = Feed(sess)
 
-    def poll():
-        nonlocal history
-        new = tail.read()
-        if isinstance(new, str):
-            history = None
-        elif new is not None:
-            history = new if history is None else pd.concat([history, new], ignore_index=True)
+    def frame(height):
+        return render(feed.history, read(sess.predictions), str(sess), height, feed.progress())
 
     if args.once or not sys.stdout.isatty():
-        poll()
+        feed.poll()
         console = Console(width=args.once and 140 or None, height=50 if args.once else None)
-        console.print(render(history, read(sess.predictions), str(sess), console.height) if history is not None
-                      else Text(f"{sess}: no events yet"))
+        console.print(frame(console.height) if feed.history is not None else Text(f"{sess}: no events yet"))
         return
     console = Console()
     stamp = None
@@ -185,11 +319,12 @@ def main():
     with Live(console=console, screen=True, auto_refresh=False) as live:
         try:
             while True:
-                poll()
-                now = tuple(os.stat(p).st_mtime_ns if p.exists() else None for p in (sess.events, sess.predictions))
+                feed.poll()
+                now = tuple(os.stat(p).st_mtime_ns if p.exists() else None
+                            for p in (sess.events, sess.predictions, sess.telemetry))
                 if now != stamp or console.size != getattr(live, "_size", None):
                     stamp, live._size = now, console.size
-                    live.update(render(history, read(sess.predictions), str(sess), console.height) if history is not None
+                    live.update(frame(console.height) if feed.history is not None
                                 else Text(f" {sess}: waiting for events.csv ..."), refresh=True)
                 time.sleep(args.interval)
         except KeyboardInterrupt:

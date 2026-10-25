@@ -81,3 +81,12 @@ def test_unreachable_store_is_an_error_not_a_crash(dirs, capsys):
     store, local = dirs
     assert sync.main(["push", "--remote", "nohost.invalid:/srv/x", "--data-dir", str(local), "--quiet"]) != 0
     assert "[sync] push failed" in capsys.readouterr().err
+
+
+def test_track_reference_is_synced_at_race_level(dirs):
+    store, local = dirs
+    put(local, "2026/Austin/track.csv", "x,y\n1,2\n")
+    put(local, "2026/Austin/race/events.csv", "e")
+    assert run("push", dirs, "2026", "Austin", "--what", "track") == 0
+    assert (store / "2026/Austin/track.csv").exists() and not (store / "2026/Austin/race").exists()
+    assert run("pull", dirs, "--what", "track") == 0
