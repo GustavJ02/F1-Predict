@@ -14,9 +14,11 @@ f1live/              shared package
   tail.py            CsvTail: read rows another process appends to a CSV
   runner.py          tails events.csv, builds per-driver state, calls a model, writes predictions.csv
   replay.py          re-plays one session's raw.txt into another session in (scaled) real time
+  watch.py           terminal viewer for predictions.csv (used by quali.watch / race.watch)
   archive.py         downloads a finished session from F1's archive into raw.txt (untested)
 race/model.py        race model template ("current order" baseline) - yours to edit
-quali/               qualifying: state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
+race/watch.py        live view of the race model's latest prediction (any columns)
+quali/               qualifying: watch.py (live view), state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both)
 run_session.sh       starts recorder + parser + runner together and restarts any that crash
 data/                gitignored
@@ -46,6 +48,16 @@ MODEL=quali.model ./run_session.sh 2026 Austin quali   # record + parse + cutoff
 python -m quali.predict_elimination 2026 Austin quali --part 2 --as-of 2026-10-24T21:33:00Z   # one-off run
 python -m quali.predict_pole 2026 Austin quali --as-of 2026-10-24T22:00:30Z            # pole probabilities (Q3)
 python -m quali.backtest_pole 2026                                                  # score pole predictions on every data/2026/*/quali
+```
+
+## Watching predictions live
+
+In a second terminal while `run_session.sh` runs (works the same for a replay):
+
+```bash
+python -m quali.watch 2026 Austin quali     # cutoff in Q1/Q2, pole probabilities in Q3
+python -m race.watch 2026 Singapore race    # latest batch of rows from the race model
+python -m quali.watch 2026 Austin replay --once   # print once and exit
 ```
 
 ## Testing without a live session
