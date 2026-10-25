@@ -51,3 +51,14 @@ def test_pole_prediction(events):
     assert late["current_driver"] == "12"
     done = predict_pole(rows, 3, verbose=False)                               # session over: pole is settled
     assert done["top3"][0]["tla"] == "ANT" and done["top3"][0]["prob"] == 1.0
+
+
+AZ = Session("2025", "Azerbaijan", "quali")
+
+
+@pytest.mark.skipif(not AZ.events.exists(), reason=f"{AZ.events} not found")
+def test_pole_not_overconfident_after_red_flag():
+    # Q3 red-flagged: three spoiled laps used to set the shift for the whole field, giving 99% to SAI (VER took pole)
+    rows = prepare(pd.read_csv(AZ.events))
+    res = predict_pole(rows, 3, "2025-09-20T13:41:00Z", verbose=False)
+    assert res["top3"][0]["prob"] < 0.8

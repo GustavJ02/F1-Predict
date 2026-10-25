@@ -5,8 +5,8 @@ lap to come (and with what probability p_run they run). Each simulation draws th
 records who ends up fastest.
 
 A driver who runs gets a new lap  center + sigma * N(0, 1), kept only if faster than their best, where
-  pace   = best in the previous part + shift   (shift = field's median change between parts, 0 if < 3 drivers
-                                                have a time in both parts)
+  pace   = best in the previous part + shift   (shift = field's median change between parts, shrunk towards 0
+                                                by n / (n + SHIFT_K), 0 if < 3 drivers have a time in both parts)
   center = min(best - mu, pace)   for drivers with a time (a first lap can be spoiled, so it only caps the
                                   estimate: a slow first lap doesn't mean a slow second one)
          = pace                   for drivers without a time yet
@@ -26,6 +26,7 @@ from f1live.paths import add_session_args, session_from_args
 from live.quali.state import session_state
 
 N_PARAM_PAIRS = 3     # drivers needed with a time in both parts before the part-to-part change is trusted
+SHIFT_K = 3.0         # the change is shrunk towards 0 by n / (n + SHIFT_K) for n drivers who have a time in both parts
 
 
 def simulate_pole(best, center, pending, p_run, sigma, n_sims=10_000, seed=0):
@@ -59,6 +60,10 @@ def predict(all_rows, part=3, as_of=None, verbose=True):
         prev_best = prev.state['best'].reindex(st.index)
         both = st['best'].notna() & prev_best.notna()
         shift = (st['best'] - prev_best)[both].median() if both.sum() >= N_PARAM_PAIRS else 0.0
+        # A few early laps are a poor guide to the whole field (Azerbaijan 2025 Q3, red-flagged: the three laps set
+        # before the stoppage were spoiled, +1.0 s on Q2, the field finished at +0.4 s and pole was given 99% to a
+        # driver who didn't take it), so the estimate is pulled towards "no change" until more drivers have run.
+        shift *= both.sum() / (both.sum() + SHIFT_K)
         pace = (prev_best + shift).to_numpy(dtype=float)
         if both.sum() >= N_PARAM_PAIRS:
             resid = (st['best'] - prev_best - shift)[both]
