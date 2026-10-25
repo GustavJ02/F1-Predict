@@ -11,12 +11,13 @@ f1live/              shared plumbing (used by everything below)
   feed.py            decoding, delta merging, file tailing, value parsing
   paths.py           data/<year>/<race>/<session>/ locations (Session)
   events.py          events.csv -> DataFrame with consistent dtypes
+  telemetry.py       raw.txt (CarData + Position) -> telemetry.csv: speed, rpm, gear, throttle, brake, x, y per driver, 1 row/s
   parse.py           raw.txt -> events.csv (race, sprint and qualifying)
   tail.py            CsvTail: read rows another process appends to a CSV
   runner.py          tails events.csv, builds per-driver state, calls a model, writes predictions.csv
   replay.py          re-plays one session's raw.txt into another session in (scaled) real time
   watch.py           terminal viewer for predictions.csv (used by the live.*.watch scripts)
-  archive.py         downloads a finished session from F1's archive into raw.txt
+  archive.py         downloads a finished session from F1's archive into raw.txt (--telemetry: raw_telemetry.txt instead)
   fetch_season.py    downloads (and parses) a whole season, or selected sessions, into data/<year>/<race>/<session>/
 live/                predictions run DURING a session
   quali/             state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
@@ -33,6 +34,8 @@ run_session.sh       starts recorder + parser + runner together and restarts any
 data/                gitignored
   <year>/<race>/<session>/
     raw.txt          FastF1 recording, the one file that must not be lost
+    raw_telemetry.txt  archive CarData/Position (only from `archive --telemetry`; live recordings carry them in raw.txt)
+    telemetry.csv    parsed car telemetry (f1live.telemetry; a race is ~100k rows at the default 1 s)
     events.csv       parsed events (rebuilt from raw.txt whenever the parser restarts)
     predictions.csv  runner output
 ```
@@ -103,3 +106,15 @@ Race laps have `lap_kind` `racing` / `in` / `out`; qualifying keeps `push` / `ot
 `gap_to_leader_s` is NaN for lapped cars (see `laps_down`). `race_lap` is the leader's lap,
 `lap_number` the driver's. `pit_lane_s` on `pit_out` is the time from pit-lane entry to exit as
 seen in the timing feed.
+
+## Car telemetry
+
+Live, `run_session.sh` starts `f1live.telemetry` next to the parser. The runner passes the last 120 s as
+`info["telemetry"]` and the latest sample per driver as `car_speed/gear/throttle/brake/x/y` columns in `state`;
+telemetry rows never trigger a model call. Archive-fetched sessions have no telemetry until you backfill:
+
+```bash
+python -m f1live.archive 2026 Singapore quali --telemetry            # one session -> raw_telemetry.txt
+python -m f1live.fetch_season 2026 --telemetry                        # every session that has no telemetry.csv yet
+python -m f1live.telemetry 2026 Singapore quali --replay             # (re)build telemetry.csv
+```

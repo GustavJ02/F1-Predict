@@ -37,6 +37,7 @@ fi
 sleep 2
 restart parser python -m f1live.parse "$YEAR" "$RACE" "$SESSION" --snapshot "$SNAPSHOT" --quiet & pids+=($!)
 sleep 1
+restart telemetry python -m f1live.telemetry "$YEAR" "$RACE" "$SESSION" & pids+=($!)
 restart runner python -m f1live.runner "$YEAR" "$RACE" "$SESSION" --model "$MODEL" --tick "$TICK" & pids+=($!)
 
 wait

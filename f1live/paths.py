@@ -41,6 +41,14 @@ class Session:
         return self.dir / "raw.txt"
 
     @property
+    def raw_telemetry(self):
+        return self.dir / "raw_telemetry.txt"      # archive CarData/Position, kept apart so raw.txt is never rewritten
+
+    @property
+    def telemetry(self):
+        return self.dir / "telemetry.csv"
+
+    @property
     def events(self):
         return self.dir / "events.csv"
 
