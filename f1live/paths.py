@@ -1,9 +1,16 @@
 """Where a session's files live: data/<year>/<race>/<session>/{raw.txt,events.csv,predictions.csv}."""
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = ROOT / "data"
+
+
+def folder_name(name):
+    """'United States' -> 'United_States', 'São Paulo' -> 'Sao_Paulo': no spaces or accents in folder names."""
+    ascii_name = unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()
+    return "_".join(ascii_name.split())
 
 
 @dataclass(frozen=True)
@@ -12,6 +19,10 @@ class Session:
     race: str
     name: str                      # quali, race, sprint, replay, ...
     data_dir: Path = DATA
+
+    def __post_init__(self):                     # accept 'United States' as well as 'United_States'
+        object.__setattr__(self, "race", folder_name(self.race))
+        object.__setattr__(self, "name", folder_name(self.name))
 
     @classmethod
     def parse(cls, spec, data_dir=DATA):

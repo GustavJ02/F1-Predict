@@ -73,13 +73,14 @@ python -m live.quali.watch 2026 Austin replay --once   # print once and exit
 
 ```bash
 python -m f1live.fetch_season 2025                                   # all sessions of a season (resumable, ~4 s each)
-python -m f1live.fetch_season 2026 --sessions fp1 fp2 fp3 sq sprint --alias "United States=Austin"
+python -m f1live.fetch_season 2026 --sessions fp1 fp2 fp3 sq sprint --alias United_States=Austin
 python -m pre.quali.predict_grid 2026 Austin                         # pole probabilities + expected grid
 python -m pre.quali.backtest                                         # score the model on every quali we have
 ```
 
 Session folders from the archive are `fp1 fp2 fp3 sq sprint quali race`; the race folder is the meeting name
-without "Grand Prix" (`Australian`, `Saudi Arabian`, `United States`, ...). `Austin` is an alias of `United States`.
+without "Grand Prix", spaces as underscores (`Australian`, `Saudi_Arabian`, `United_States`, ...); a name with spaces
+or accents is accepted too and converted. `Austin` is an alias of `United_States`.
 
 ## Testing without a live session
 

@@ -119,7 +119,7 @@ if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     ap = argparse.ArgumentParser()
     ap.add_argument("year", type=int)
-    ap.add_argument("race", help="race folder, e.g. Austin or 'United States'")
+    ap.add_argument("race", help="race folder, e.g. Austin or United_States ('United States' also works)")
     ap.add_argument("--columns", nargs="+", choices=FEATURES, help="restrict the inputs (default: all available)")
     ap.add_argument("--top", type=int, default=10)
     ap.add_argument("--data-dir", default=DATA, type=type(DATA))

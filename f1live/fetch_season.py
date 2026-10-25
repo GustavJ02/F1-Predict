@@ -6,13 +6,13 @@ Usage (from the repo root):
     python -m f1live.fetch_season 2026 --sessions fp1 fp2 fp3 sq sprint --alias "United States=Austin"
     python -m f1live.fetch_season 2025 --only Monaco Italian --dry-run
 
-Folders: <race> is the meeting name without "Grand Prix" (e.g. Australian, Saudi Arabian, United States);
+Folders: <race> is the meeting name without "Grand Prix", spaces as underscores (Australian, Saudi_Arabian, United_States);
 <session> is fp1 fp2 fp3 sq sprint quali race. Sessions that already have a raw.txt are skipped, and
 sessions without events.csv are (re-)parsed, so an interrupted run can simply be started again.
 """
 import argparse, subprocess, sys, time
 from f1live.archive import BASE, download, get_json
-from f1live.paths import DATA, Session
+from f1live.paths import DATA, Session, folder_name
 
 FOLDERS = {"Practice 1": "fp1", "Practice 2": "fp2", "Practice 3": "fp3", "Sprint Qualifying": "sq",
            "Sprint": "sprint", "Qualifying": "quali", "Race": "race"}
@@ -22,7 +22,7 @@ def plan(year, sessions, only, alias, data_dir):
     """-> [(Session, archive path)] for sessions that exist in the archive and match the filters."""
     out = []
     for mt in get_json(f"{BASE}{year}/Index.json")["Meetings"]:
-        race = mt["Name"].removesuffix(" Grand Prix")
+        race = folder_name(mt["Name"].removesuffix(" Grand Prix"))
         if "Testing" in mt["Name"] or (only and race not in only):
             continue
         race = alias.get(race, race)
@@ -59,9 +59,9 @@ def main():
     ap.add_argument("--data-dir", default=DATA, type=type(DATA))
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
-    alias = dict(x.split("=", 1) for x in a.alias)
+    alias = {folder_name(k): v for k, v in (x.split("=", 1) for x in a.alias)}
 
-    todo = plan(a.year, a.sessions, a.only, alias, a.data_dir)
+    todo = plan(a.year, a.sessions, {folder_name(x) for x in a.only or []}, alias, a.data_dir)
     failed = []
     for i, (sess, path) in enumerate(todo, 1):
         have_raw, have_events = sess.raw.exists(), sess.events.exists()

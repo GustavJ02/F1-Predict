@@ -1,20 +1,21 @@
 """Past sessions as pace tables, for the pre-session predictions (pre.quali, pre.race).
 
 Everything is read from data/<year>/<race>/<session>/events.csv (fetch with python -m f1live.fetch_season).
-Session folders: fp1 fp2 fp3 sq sprint quali race. Race folders are the meeting name without "Grand Prix".
+Session folders: fp1 fp2 fp3 sq sprint quali race. Race folders are the meeting name without "Grand Prix", spaces as underscores.
 """
 import pandas as pd
 from f1live.events import load
-from f1live.paths import DATA
+from f1live.paths import DATA, folder_name
 
 SESSIONS = ["fp1", "fp2", "fp3", "sq", "sprint", "quali", "race"]    # weekend order for a sprint-less weekend: fp1 fp2 fp3 quali race
 FLYING = ["push", "other"]                                           # lap_kind of laps that are neither in- nor out-laps
 
 # Folders that changed name between years / recordings (calendar order matters, so everything keys on race folder)
-ALIASES = {"Austin": "United States"}
+ALIASES = {"Austin": "United_States"}
 
 
 def race_key(race):
+    race = folder_name(race)
     return ALIASES.get(race, race)
 
 
