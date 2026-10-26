@@ -91,6 +91,15 @@ Panels (a wide screen shows three columns, a narrower one stacks the last two):
   `python -m live.race.track 2026 Austin quali` writes from any session's telemetry (so it can be ready before the race;
   sync it with `--what track`). Without telemetry the positions are estimated from lap timing and the panel says so.
 
+**Layouts, corners and sectors for the whole calendar.** `python -m live.race.tracks` writes `track.csv`, `corners.csv` and
+`sectors.csv` into `data/<year>/<race>/` for every round of the season (default 2026). A circuit is built from this year's
+qualifying telemetry if the race has been run, otherwise last year's, so the not-yet-run rounds are covered too; existing
+`track.csv` files are kept (`--force` rebuilds, `--dry-run` shows the source sessions). `sectors.csv` has the three timing sectors
+with start/end as lap fraction and metres along the lap, found by projecting where cars were when they finished S1 and S2 (median
+over the clean flying laps, spread in metres given). Caveats: telemetry is about 1 Hz, so boundaries are good to tens of metres, and
+lap lengths measured on the polyline come out 1-3% short of the official figures. Corners come from FastF1 circuit info and are
+missing for circuits it doesn't know (Madrid, Bahrain 2026). Sync them with `--what track corners sectors`.
+
 **Stopped and slow cars, safety car banner.** A car standing still on the track (speed at most 5 km/h for 3 s after it was
 racing, not in the pit lane) gets a red `✖` and a blinking label on the lap-position line and is named above it; a car
 crawling at under 45% of the speed cars normally have at that spot (learned from this race's green-flag running, so slow corners
@@ -189,7 +198,7 @@ python -m f1live.sync push                         # send new/grown files to the
 - `run_session.sh` pushes its session folder every 30 s while recording and once on exit, so a live session is
   backed up on the Pi as it happens. If the Pi is unreachable it keeps going and retries (`SYNC=0` turns it off;
   replays are never pushed). Everything is written locally first: a network problem can't cost live data.
-- File types for `--what`: `events` (default for pull), `telemetry` (~6 GB), `raw`, `raw_telemetry`, `predictions`, `all`.
+- File types for `--what`: `events` (default for pull), `telemetry` (~6 GB), `raw`, `raw_telemetry`, `predictions`, `track`, `corners`, `sectors`, `all`.
 
 ## Race day
 

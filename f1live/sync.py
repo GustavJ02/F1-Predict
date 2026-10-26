@@ -28,7 +28,7 @@ from f1live.paths import DATA, REMOTE, folder_name
 
 KINDS = {"events": ["events.csv"], "telemetry": ["telemetry.csv"], "raw": ["raw.txt"],
          "raw_telemetry": ["raw_telemetry.txt"], "predictions": ["predictions.csv"]}
-RACE_LEVEL = {"track": "track.csv"}          # lives in <year>/<race>/, not in a session folder (see live.race.track)
+RACE_LEVEL = {"track": "track.csv", "corners": "corners.csv", "sectors": "sectors.csv"}   # live in <year>/<race>/, not in a session folder (live.race.track, live.race.tracks)
 SSH = "ssh -o BatchMode=yes -o ConnectTimeout=8 -o ServerAliveInterval=15 -o ServerAliveCountMax=3"
 VANISHED = 24      # rsync's "some source files vanished", normal while a file is being rewritten
 

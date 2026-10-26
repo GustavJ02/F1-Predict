@@ -22,7 +22,7 @@ import argparse
 import numpy as np
 import pandas as pd
 from f1live.events import prepare
-from f1live.paths import add_session_args, session_from_args
+from f1live.paths import add_session_args, folder_name, session_from_args
 
 FLYING = ("racing", "push", "other")     # lap kinds of a lap run at speed (race laps, qualifying/practice flying laps)
 N_POINTS = 600
@@ -155,9 +155,11 @@ def fetch_corners(year, race):
     from fastf1.mvapi import get_circuit_info
     try:
         sched = fastf1.get_event_schedule(int(year), include_testing=False)
-        want = race.lower().replace("_", " ")
+        plain = lambda t: folder_name(str(t)).lower().replace("_", " ")          # no accents: 'São Paulo' -> 'sao paulo'
+        want = plain(race)
         for _, ev in sched.iterrows():
-            if want in (str(ev["Location"]).lower(), str(ev["Country"]).lower(), str(ev["EventName"]).lower()):
+            name = plain(ev["EventName"])
+            if want in (plain(ev["Location"]), plain(ev["Country"]), name, name.replace("grand prix", "").strip()):
                 session = fastf1.get_session(int(year), ev["RoundNumber"], "Q")      # has happened before the race
                 session.load(laps=False, telemetry=False, weather=False, messages=False)
                 key = session.session_info["Meeting"]["Circuit"]["Key"]
