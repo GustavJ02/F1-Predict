@@ -38,6 +38,7 @@ live/                predictions run DURING a session
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both),
                      classification.py + watch.py (qualifying dashboard), backtest_pole.py (score pole predictions on past sessions),
                      prior.py (pace prior for Q1/Q2 from earlier sessions + parts), backtest_cutoff.py (score the cutoff)
+                     plot_cutoff.py (plot of the projected Q1/Q2 cutoff over time with its band; --follow redraws it live)
   practice/          watch.py (FP1-FP3 dashboard), status.py (clock, flags, push/slow/out per car, long runs), trackmap.py (circuit map)
   race/              pace.py (race pace per driver), battles.py (who will be within 1 s of whom, in how many laps),
                      track.py (lap progress of each car from telemetry), priors.py + priors.json (what past races say
