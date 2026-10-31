@@ -106,7 +106,7 @@ def _universe(sc, market):
 
 def solve(sc, market, mode="fresh", budget=None, limitless=False, risk=0.0, alpha=ALPHA, swaps=None, exclude=()):
     """The best plan, or None if there is none. mode 'fresh': no current team, no swap penalty. 'transfers': the team of `market`,
-    swaps beyond market.free_transfers cost 10 each. swaps: force exactly that many swaps (transfers mode). exclude: asset sets
+    swaps beyond market.free_transfers cost 10 each (none with limitless: no cap and no swap penalty). swaps: force exactly that many swaps (transfers mode). exclude: asset sets
     (collections of driver codes and constructor names) of plans already found; a team that shares 6 or more of 7 assets with one
     is not returned (the top-N list)."""
     drivers, cons = _universe(sc, market)
@@ -127,7 +127,7 @@ def solve(sc, market, mode="fresh", budget=None, limitless=False, risk=0.0, alph
     mean_d, mean_c = Pd.mean(axis=0), Pc.mean(axis=0)
     c = np.zeros(n)                                              # maximise: stored negated
     c[ix], c[iz], c[iy] = (1 - risk) * mean_d, (1 - risk) * mean_d, (1 - risk) * mean_c
-    c[ie] = S.EXTRA_TRANSFER if transfers else 0.0
+    c[ie] = S.EXTRA_TRANSFER if transfers and not limitless else 0.0      # the Limitless chip also makes every swap free
     if use_cvar:
         c[ieta], c[iu0:] = risk, -risk / (alpha * S_)
     rows, lo, hi = [], [], []
@@ -188,7 +188,7 @@ def solve(sc, market, mode="fresh", budget=None, limitless=False, risk=0.0, alph
         into = [a for a in team_d + team_c if a not in market.team_drivers + market.team_constructors]
         out = [a for a in market.team_drivers + market.team_constructors if a not in team_d + team_c]
         n_swaps = len(into)
-        penalty = S.transfer_penalty(n_swaps, market.free_transfers)
+        penalty = 0 if limitless else S.transfer_penalty(n_swaps, market.free_transfers)
     return Plan(team_d, team_c, boost, cost, n_swaps, penalty, plan_points(sc, team_d, team_c, boost, penalty), out, into)
 
 
@@ -247,7 +247,8 @@ def report_transfers(sc, market, a):
     keep_pts = plan_points(sc, market.team_drivers, market.team_constructors, keep_boost)
     plans = swap_table(sc, market, budget=a.budget, limitless=a.limitless, risk=a.risk, alpha=ALPHA)
     print(f"\nTransfers for {a.year} {a.race}: your team {' '.join(market.team_drivers)} | {' + '.join(market.team_constructors)}"
-          f"  (value ${market.team_value():.1f}M, bank ${market.bank:.1f}M, budget ${cap:.1f}M, {market.free_transfers} free swaps)\n")
+          f"  (value ${market.team_value():.1f}M, bank ${market.bank:.1f}M, "
+          + ("Limitless: no budget cap, swaps are free" if a.limitless else f"budget ${cap:.1f}M, {market.free_transfers} free swaps") + ")\n")
     print(f"keep:     boost {keep_boost}  mean {keep_pts.mean():.1f}  sd {keep_pts.std():.1f}\n")
     out_w = max([len(" ".join(p.out) or "-") for p in plans] + [3])
     in_w = max([len(" ".join(p.into) or "-") for p in plans] + [2])

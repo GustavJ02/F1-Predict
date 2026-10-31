@@ -126,3 +126,15 @@ def test_an_inactive_driver_in_the_team_is_swapped_out_on_its_own():
     sc.driver_points[:, 2] = -25.0                                                 # D2 does not take part
     plan = O.solve(sc, market, "transfers")
     assert "D2" not in plan.drivers and "D2" in plan.out
+
+
+def test_limitless_makes_the_swaps_free_so_transfers_equals_a_fresh_team():
+    sc, market = weekend(8)
+    market.team_drivers, market.team_constructors = ["D0", "D1", "D2", "D3", "D4"], ["C0", "C1"]
+    market.bank, market.free_transfers = 0.0, 2
+    fresh = O.solve(sc, market, "fresh", limitless=True)
+    swap = O.solve(sc, market, "transfers", limitless=True)
+    assert swap.penalty == 0
+    assert swap.mean == pytest.approx(fresh.mean, abs=1e-6)
+    paid = O.solve(sc, market, "transfers", budget=1e9)                              # a cap that never binds, but swaps still cost
+    assert paid.mean <= fresh.mean + 1e-9
