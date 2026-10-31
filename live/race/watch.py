@@ -600,12 +600,12 @@ def safe_frame(build, last_good, log_path):
         return (Group(banner, last_good) if last_good is not None else banner), last_good
 
 
-def window_title(sess, custom=None):
+def window_title(sess, custom=None, name="race dashboard"):
     """The terminal window's title: what you asked for with --title, else the session."""
-    return custom or f"F1 race dashboard · {sess}"
+    return custom or f"F1 {name} · {sess}"
 
 
-def main(render_fn=render, race=True, description=__doc__):
+def main(render_fn=render, race=True, description=__doc__, name="race dashboard"):
     """Run the dashboard. render_fn(...) draws one frame with the arguments of render(); a practice dashboard (race=False) is also
     given ref=, the track reference lap (x, y points) or None."""
     ap = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -614,7 +614,7 @@ def main(render_fn=render, race=True, description=__doc__):
     ap.add_argument("--delay", type=float, help="show the race as it was this many seconds ago, to match a delayed broadcast "
                                                  "(default: what you used last time)")
     ap.add_argument("--once", action="store_true", help="print one frame and exit")
-    ap.add_argument("--title", help="title of the terminal window (default: 'F1 race dashboard · <session>')")
+    ap.add_argument("--title", help="title of the terminal window (default: 'F1 <name> · <session>')")
     ap.add_argument("--view", choices=["usual", "optimal"], default="usual",
                     help="start with the projection (usual) or the finish with every driver on his best strategy (optimal); "
                          "the key s switches")
@@ -643,7 +643,7 @@ def main(render_fn=render, race=True, description=__doc__):
                       else Text(f"{sess}: no events yet"))
         return
     console = Console()
-    console.set_window_title(window_title(sess, args.title))          # restored by your shell's prompt when you quit
+    console.set_window_title(window_title(sess, args.title, name))          # restored by your shell's prompt when you quit
     stamp, drawn_at, drawn_delay, drawn_phase, last_good = None, None, None, None, None
     error_log = Path(sess.data_dir) / ".watch_error.log"
     from rich.live import Live

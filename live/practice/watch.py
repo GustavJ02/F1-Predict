@@ -34,6 +34,11 @@ MODE_STYLE = {"PUSH": "bold green", "OUT": "dim", "SLOW": "yellow", "PIT": "dim"
 WIDE = 130              # columns from which the map sits beside the timesheet instead of below it
 
 
+def last_lap_text(seconds):
+    """A last lap for the LAST column: '-' when there is none or it was more than five minutes (a lap spent in the garage)."""
+    return "-" if seconds is None or pd.isna(seconds) or seconds > 300 else lap_time(seconds)
+
+
 def clock_text(seconds):
     if seconds is None:
         return "-"
@@ -41,10 +46,14 @@ def clock_text(seconds):
     return f"{h}:{rest // 60:02d}:{rest % 60:02d}" if h else f"{rest // 60}:{rest % 60:02d}"
 
 
-def header(history, sess, delay=0.0):
+def header(history, sess, delay=0.0, part=None, over=None):
+    """The top line. part: a label for the part of the session (Q1, Q2, Q3) shown after the session name; over: whether the chequered
+    flag has been shown (default: any time in the session; a qualifying part ends with one too, so it passes its own)."""
     t = Text()
     t.append(f" {sess} ", style="bold reverse")
-    over = chequered(history)
+    if part:
+        t.append(f" {part} ", style="bold black on cyan")
+    over = chequered(history) if over is None else over
     t.append("   ")
     t.append(" CHEQUERED FLAG " if over else f" {clock_text(clock_left(history))} LEFT ", style="bold reverse")
     track = track_state(history)
@@ -98,7 +107,7 @@ def timesheet(history, modes):
                   str(int(timed.get(drv, 0))),
                   Text(f"{now[0]} {int(r['tyre_laps'])}" if pd.notna(r["tyre_laps"]) else "-", style=now[1]),
                   Text({"STOPPED": "STOP"}.get(mode, mode), style=MODE_STYLE.get(mode, "")),
-                  lap_time(last_lap.get(drv)) if drv in last_lap.index else "-",
+                  last_lap_text(last_lap.get(drv)),
                   Text(tyre(run["run_compound"])[0] if run is not None else "", style=tyre(run["run_compound"])[1] if run is not None else ""),
                   lap_time(run["run_pace_s"]) if run is not None else "",
                   f"{run['run_gap_s']:.2f}" if run is not None else "",
@@ -112,16 +121,13 @@ def messages_panel(history):
     return Panel(Group(*lines) if lines else Text("no messages yet", style="dim"), title="Race control", title_align="left")
 
 
-def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0, strategy=None,
-           view="usual", flags=None, flash=False, ref=None):
-    """One frame. Same arguments as live.race.watch.render (preds, strategy and view are not used), plus ref: the track reference lap."""
-    ok = history is not None and len(history)
-    if not ok:
-        return Text(f" {sess}  waiting ... (delay {delay:g} s)")
+def circuit_panel(history, progress, flags, sectors, corners, flash, ref):
+    """-> (Panel with the circuit map and the legend, {driver: mode}, {driver: 'stopped'}): the map of every car in its team colour,
+    styled by what it is doing (live.practice.status.car_modes). `progress` is ({driver: lap fraction}, 'telemetry' | 'timing' | None)."""
     prog, mode = progress or ({}, None)
     modes = car_modes(history, prog, flags, measured=mode == "telemetry")
     lat = latest(history)
-    flags = {d: k for d, k in (flags or {}).items() if k == "stopped"}
+    stopped = {d: k for d, k in (flags or {}).items() if k == "stopped"}
     cars = [(str(lat.loc[d, "tla"]), frac, TEAM_COLOUR.get(lat.loc[d, "team"], "white"), modes.get(d, "RUN"))
             for d, frac in prog.items() if d in lat.index]
     counts = pd.Series(list(modes.values())).value_counts()
@@ -129,19 +135,28 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
     legend = Text.assemble(sector_legend(sectors), ("PUSH ", "bold green"), f"{counts.get('PUSH', 0)}  ",
                            ("OUT ○ ", "dim"), f"{counts.get('OUT', 0)}  ", ("SLOW ▼ ", "yellow"), f"{counts.get('SLOW', 0)}  ",
                            ("PIT ", "dim"), f"{counts.get('PIT', 0)}")
-    wide = width >= WIDE
     if ref is not None and mode == "telemetry":
         picture = TrackMap(ref, cars, sectors, corners, flash)
     else:
         picture = Text("the map needs car telemetry (f1live.telemetry) and a track reference; waiting ..." if ref is None
                        else "waiting for car telemetry ...", style="dim")
+    return Panel(picture, title=f"Circuit ({note})", title_align="left", subtitle=legend, subtitle_align="right"), modes, stopped
+
+
+def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0, strategy=None,
+           view="usual", flags=None, flash=False, ref=None):
+    """One frame. Same arguments as live.race.watch.render (preds, strategy and view are not used), plus ref: the track reference lap."""
+    ok = history is not None and len(history)
+    if not ok:
+        return Text(f" {sess}  waiting ... (delay {delay:g} s)")
+    map_panel, modes, flags = circuit_panel(history, progress, flags, sectors, corners, flash, ref)
+    wide = width >= WIDE
     layout = Layout()
     layout.split_column(Layout(name="head", size=1), Layout(name="alert", size=1), Layout(name="body"),
                         Layout(messages_panel(history), name="foot", size=6))
     layout["head"].update(header(history, sess, delay))
     layout["alert"].update(alert_line(history, flags, flash))
     sheet = Panel(timesheet(history, modes), title="Timesheet", title_align="left")
-    map_panel = Panel(picture, title=f"Circuit ({note})", title_align="left", subtitle=legend, subtitle_align="right")
     if wide:
         layout["body"].split_row(Layout(sheet, ratio=11), Layout(map_panel, ratio=9))
     else:
@@ -150,4 +165,4 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
 
 
 if __name__ == "__main__":
-    main(render, race=False, description=__doc__)
+    main(render, race=False, description=__doc__, name="practice dashboard")
