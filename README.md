@@ -49,7 +49,8 @@ pre/                 predictions made BEFORE a session, from past sessions
   quali/             parts.py (pace of each of Q1/Q2/Q3 from earlier sessions and parts), features.py (form, practice,
                      sprint-quali inputs), predict_grid.py (pole probabilities and
                      expected grid), backtest.py (score it on every past quali, with ablations)
-  race/              pace.py (race pace per driver and season rating), predict_result.py (finishing distribution per driver
+  race/              predict_sc.py (distribution of SC / VSC deployments: rain, season phase, season and circuit effects, fitted on every race in data/),
+                     pace.py (race pace per driver and season rating), predict_result.py (finishing distribution per driver
                      from the grid), backtest.py (score it on every past race)
 play/                strategy playground: try tyre strategies and tweaks, and compute the best strategy with pit windows
   strategy.py        a strategy as text (M-18-H-40-S) and its rules
@@ -211,7 +212,6 @@ python -m fastf1 auth f1tv --status          # check the F1TV login before the s
 `live/race/model.py` (battle predictions) is the default model; edit it while it runs, the runner reloads it on save and survives exceptions.
 Use another model with `MODEL=live.quali.my_model ./run_session.sh ...` (a module with `predict(state, history, info)`).
 
-## Qualifying
 ## Practice
 
 `./run_session.sh 2026 Mexico_City fp1` (also `fp2`, `fp3`) records and parses the session but starts no model: there is nothing
@@ -233,6 +233,7 @@ since the last line crossing and the distance covered (within 2 % of the driver'
 against the Austin telemetry: slow laps are caught reliably, but a quick long-run lap can also read PUSH. Long-run pace (5+ clean laps in
 a stint, green flag, no in/out laps) is not fuel or engine-mode corrected: compare it only between cars on the same tyre.
 
+## Qualifying
 
 ```bash
 MODEL=live.quali.model ./run_session.sh 2026 Austin quali   # record + parse + cutoff prediction in predictions.csv
@@ -247,9 +248,10 @@ In a second terminal while `run_session.sh` runs (works the same for a replay):
 
 ```bash
 python -m live.quali.watch 2026 Austin quali     # cutoff in Q1/Q2, pole probabilities in Q3
-python -m live.race.watch 2026 Singapore race    # full-screen race dashboard (see below)
 python -m live.practice.watch 2026 Austin fp1    # practice dashboard: timesheet, flags and circuit map
+python -m live.race.watch 2026 Singapore race    # full-screen race dashboard (see below)
 python -m live.quali.watch 2026 Austin replay --once   # print once and exit
+python -m live.quali.watch 2026 Austin quali --delay 30  # as it was 30 s ago (keys ] [ } { 0 adjust it live)
 ```
 
 ## Before a session (pre.quali)
@@ -271,10 +273,10 @@ or accents is accepted too and converted. `Austin` is an alias of `United_States
 python -m pre.race.predict_result 2026 Austin --laps 56              # finishing distribution for every driver
 python -m pre.race.predict_result 2026 Austin --grid ANT,LEC,VER,...  # the real grid if there are penalties
 python -m pre.race.backtest                                          # score it on every race we have
+python -m pre.race.predict_sc 2026 Mexico_City --rain-prob 0.1       # how many safety cars: SC, VSC only, SC or VSC (rain chance, --date)
 ```
 
 It prints, per driver, the grid slot, the mean finishing position, the P10-P90 range, the chances of a win / podium / top 10,
-python -m live.quali.watch 2026 Austin quali --delay 30  # as it was 30 s ago (keys ] [ } { 0 adjust it live)
 and a small bar chart of the whole distribution over positions 1..22; the full table (`pos_1 ... pos_22`) goes to
 `data/<year>/<race>/pre_race.csv`.
 
