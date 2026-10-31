@@ -249,12 +249,14 @@ def report_transfers(sc, market, a):
     print(f"\nTransfers for {a.year} {a.race}: your team {' '.join(market.team_drivers)} | {' + '.join(market.team_constructors)}"
           f"  (value ${market.team_value():.1f}M, bank ${market.bank:.1f}M, budget ${cap:.1f}M, {market.free_transfers} free swaps)\n")
     print(f"keep:     boost {keep_boost}  mean {keep_pts.mean():.1f}  sd {keep_pts.std():.1f}\n")
-    print("swaps  net mean  vs keep  P(better)  cost    out -> in                       boost")
+    out_w = max([len(" ".join(p.out) or "-") for p in plans] + [3])
+    in_w = max([len(" ".join(p.into) or "-") for p in plans] + [2])
+    print(f"swaps  net mean  vs keep  P(better)   cost  {'out':<{out_w}} -> {'in':<{in_w}}  boost")
     best = None
     for p in plans:
         diff = p.points - keep_pts
         better = "-" if p.swaps == 0 else f"{(diff > 0).mean():.0%}"
-        row = f"{p.swaps:>5}  {p.mean:8.1f}  {p.mean - keep_pts.mean():+7.1f}  {better:>8}  {p.cost:5.1f}   {' '.join(p.out) or '-':14s} -> {' '.join(p.into) or '-':14s}  {p.boost}"
+        row = f"{p.swaps:>5}  {p.mean:8.1f}  {p.mean - keep_pts.mean():+7.1f}  {better:>8}  {p.cost:5.1f}  {' '.join(p.out) or '-':<{out_w}} -> {' '.join(p.into) or '-':<{in_w}}  {p.boost}"
         print(row)
         if best is None or p.mean > best.mean:
             best = p
