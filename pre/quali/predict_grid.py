@@ -97,12 +97,17 @@ def predict(fit, target):
     return pd.Series(pred, index=target.index)
 
 
-def simulate(pred, teams, fit, n_sims=N_SIMS, seed=0):
-    """-> DataFrame per driver: gap (predicted %), pole, top3, position (expected)."""
+def draw_gaps(pred, teams, fit, n_sims=N_SIMS, seed=0):
+    """(n_sims, drivers) simulated quali gaps (%) to the predicted pole: prediction + shared team shock + own noise."""
     rng = np.random.default_rng(seed)
     codes, uniq = pd.factorize(teams)
     shock = fit.sigma_team * rng.standard_normal((n_sims, len(uniq)))[:, codes]
-    draw = pred.to_numpy() + shock + fit.sigma_driver * rng.standard_normal((n_sims, len(pred)))
+    return pred.to_numpy() + shock + fit.sigma_driver * rng.standard_normal((n_sims, len(pred)))
+
+
+def simulate(pred, teams, fit, n_sims=N_SIMS, seed=0):
+    """-> DataFrame per driver: gap (predicted %), pole, top3, position (expected)."""
+    draw = draw_gaps(pred, teams, fit, n_sims, seed)
     pos = draw.argsort(axis=1).argsort(axis=1) + 1
     return pd.DataFrame({"gap": pred, "pole": (pos == 1).mean(axis=0), "top3": (pos <= 3).mean(axis=0),
                          "position": pos.mean(axis=0)}, index=pred.index)

@@ -53,6 +53,14 @@ pre/                 predictions made BEFORE a session, from past sessions
   race/              predict_sc.py (distribution of SC / VSC deployments: rain, season phase, season and circuit effects, fitted on every race in data/),
                      pace.py (race pace per driver and season rating), predict_result.py (finishing distribution per driver
                      from the grid), backtest.py (score it on every past race)
+fantasy/             F1 Fantasy: expected points per driver and constructor for a weekend, and the best team (WIP)
+  scoring.py         the official point tables as pure functions (fantasy.formula1.com/en/game-rules)
+  overtakes.py       count on-track overtakes from events.csv (by lap, checked against the live position feed) and a model of how many
+                     a driver makes given where he starts and finishes
+  pitstops.py        constructor pit stop points from each team's stop-time quartiles (data/fantasy/pit_stops.json) and the pit-lane times
+  scenarios.py       Monte Carlo of a weekend scored in fantasy points: simulated qualifying, race (calibrated like pre.race), overtakes,
+                     pit stops, fastest lap, Driver of the Day
+  backtest.py        expected driver points against what drivers really scored on finished races
 play/                strategy playground: try tyre strategies and tweaks, and compute the best strategy with pit windows
   strategy.py        a strategy as text (M-18-H-40-S) and its rules
   scenario.py        a race to experiment on (pre-race from the grid, or live from the current state) and paired comparisons

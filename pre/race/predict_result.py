@@ -168,10 +168,10 @@ def simulate_from_grid(grid, rel, sd, priors, circuit, total, tlap, sims=SIMS, s
     return simulate(cars, (tlap, 0, total), "AllClear", priors, circuit, sims, seed, **{**defaults, **opt})
 
 
-def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, before=None, use_rating=True):
+def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, before=None, use_rating=True, q=None):
     """Everything the race simulation needs for a weekend, or (None, reason): a dict with order (grid, driver codes),
     rel / sd (pace and its uncertainty per driver), total laps, typical lap time, circuit, and the pace model fit."""
-    q = quali_table(av, year, race)
+    q = quali_table(av, year, race) if q is None else q          # q: a predicted qualifying table (quali_table's columns) before quali
     if q is None:
         return None, f"no qualifying data for {year} {race}"
     if before is None:

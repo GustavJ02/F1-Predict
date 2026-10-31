@@ -175,7 +175,8 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     tweaks   {tla: {'pace': s per lap (negative = faster), 'wear': multiplier on tyre wear, 'pit': extra seconds per stop}}
     All the random draws that depend on what a car does (its next stint, its next compound) are drawn up front per car and
     stop, so changing one car's strategy leaves every other car's randomness untouched: two runs with the same seed can be
-    compared directly. The finishing order of every run is returned in info['finish'] (runs x cars) for that.
+    compared directly. The finishing order of every run is returned in info['finish'] (runs x cars) for that; with it info['retired'] (bool), info['stops']
+    (number of stops) and info['fastest_lap_s'] (the quickest lap without a stop or safety car, inf if none), all runs x cars.
     PACE_SD, LAP_NOISE, PIT_SCALE and GAP_MIN were set by a grid over the backtest's calibration (live.race.backtest_projection)."""
     sc_on, dnf_p = opt.get("sc", True), DNF_PER_LAP * opt.get("dnf_scale", 1.0) if opt.get("dnf", True) else 0.0
     pace_sd, lap_noise, gap_min = opt.get("pace_sd", PACE_SD), opt.get("lap_noise", LAP_NOISE), opt.get("gap_min", GAP_MIN)
@@ -231,6 +232,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         vsc_left[:] = 1
     had_sc = (sc_left > 0) | (vsc_left > 0)
     stops_done = np.zeros((S, C))
+    best_lap = np.full((S, C), np.inf)                                   # fastest clean (green, no stop) lap of every car
 
     for k in range(1, R + 1):
         lap_no = n0 + k
@@ -247,6 +249,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         base_lt = lap_time(model, pace, comp, age, lap_no, wear_mult, temp)  # deterministic, used for pass odds
         lt = base_lt + lap_noise * rng.standard_normal((S, C))
         lt = np.where(under_sc[:, None], t_lead * SC_LAP_FACTOR, np.where(under_vsc[:, None], lt * VSC_LAP_FACTOR, lt))
+        lt_clean = lt
 
         # --- pit stops
         due = (age + 1 >= stop_age) & (stop_age - age <= R - k + 1) | (~used2 & (k >= R - 1) & (stop_age > age))
@@ -278,6 +281,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
         age = np.where(pit, 0.0, age + 1)
         # --- retirements
         alive &= ~(rng.random((S, C)) < dnf_p)
+        best_lap = np.minimum(best_lap, np.where(alive & ~pit & ~under_any, lt_clean, np.inf))
         lt = np.where(alive, lt, np.inf)
 
         t_new = t + lt
@@ -328,7 +332,7 @@ def simulate(cars, meta, track, priors, circuit, n_sims=N_SIMS, seed=0, **opt):
     out = out.sort_values(["mean_pos", "position"]).reset_index(drop=True)
     out["proj_rank"] = np.arange(1, len(out) + 1)
     return out, dict(laps_left=R, p_sc=float(had_sc.mean()), under_sc=track in ("SCDeployed", "VSCDeployed"),
-                     finish=finish, tlas=tlas)
+                     finish=finish, tlas=tlas, retired=~alive, stops=stops_done, fastest_lap_s=best_lap)
 
 
 def priors_clip():
