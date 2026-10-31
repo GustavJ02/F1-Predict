@@ -28,14 +28,15 @@ f1live/              shared plumbing (used by everything below)
   tail.py            CsvTail: read rows another process appends to a CSV
   runner.py          tails events.csv, builds per-driver state, calls a model, writes predictions.csv
   replay.py          re-plays one session's raw.txt into another session in (scaled) real time
-  watch.py           terminal viewer for predictions.csv (used by the live.*.watch scripts)
+  watch.py           text helpers and the predictions.csv reader the dashboards share
+  delay.py           the delay of the live dashboards (keys ] [ } { 0, remembered between runs)
   sync.py            rsync data/ with the central store (rpi:/srv/F1-data): status / pull / push
   archive.py         downloads a finished session from F1's archive into raw.txt (--telemetry: raw_telemetry.txt instead)
   fetch_season.py    downloads (and parses) a whole season, or selected sessions, into data/<year>/<race>/<session>/
 live/                predictions run DURING a session
   quali/             state.py (shared per-driver state), predict_elimination.py (Q1/Q2 cutoff),
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both),
-                     watch.py (live view), backtest_pole.py (score pole predictions on past sessions),
+                     classification.py + watch.py (qualifying dashboard), backtest_pole.py (score pole predictions on past sessions),
                      prior.py (pace prior for Q1/Q2 from earlier sessions + parts), backtest_cutoff.py (score the cutoff)
   practice/          watch.py (FP1-FP3 dashboard), status.py (clock, flags, push/slow/out per car, long runs), trackmap.py (circuit map)
   race/              pace.py (race pace per driver), battles.py (who will be within 1 s of whom, in how many laps),
@@ -240,14 +241,20 @@ MODEL=live.quali.model ./run_session.sh 2026 Austin quali   # record + parse + c
 python -m live.quali.predict_elimination 2026 Austin quali --part 2 --as-of 2026-10-24T21:33:00Z   # one-off run
 python -m live.quali.predict_pole 2026 Austin quali --as-of 2026-10-24T22:00:30Z            # pole probabilities (Q3)
 python -m live.quali.backtest_pole 2026                                                  # score pole predictions on every data/2026/*/quali
+python -m live.quali.watch 2026 Austin quali                                             # the dashboard, in a second terminal
 ```
+
+The dashboard (`live.quali.watch`) has the practice dashboard's header, flags and circuit map with every car (PUSH / OUT / SLOW / PIT
+and stopped cars, see Practice) next to the classification in timing-screen order, with the best time of each part, the gap, the tyre, a
+line at the cutoff and the knocked-out cars dimmed. Above the map the cutoff (Q1/Q2) or pole chances (Q3) from `predictions.csv`: they
+only appear when the session runs with `MODEL=live.quali.model`. `--delay` and the keys `] [ } { 0` work as in the race dashboard.
 
 ## Watching predictions live
 
 In a second terminal while `run_session.sh` runs (works the same for a replay):
 
 ```bash
-python -m live.quali.watch 2026 Austin quali     # cutoff in Q1/Q2, pole probabilities in Q3
+python -m live.quali.watch 2026 Austin quali     # qualifying dashboard: classification, cutoff / pole predictions, flags, circuit map
 python -m live.practice.watch 2026 Austin fp1    # practice dashboard: timesheet, flags and circuit map
 python -m live.race.watch 2026 Singapore race    # full-screen race dashboard (see below)
 python -m live.quali.watch 2026 Austin replay --once   # print once and exit

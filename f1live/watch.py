@@ -1,16 +1,5 @@
-"""Terminal viewer for a session's predictions.csv: redraws in place whenever the file changes.
-
-Not run directly: live.quali.watch and live.race.watch call `main(render)` with a function that turns the predictions
-DataFrame into lines of text.
-"""
-import argparse, os, shutil, sys
-from datetime import datetime
+"""Helpers the live dashboards share for text tables and predictions.csv."""
 import pandas as pd
-from f1live.delay import MAX_DELAY, Keys, adjust_delay, load_delay, save_delay
-from f1live.paths import add_session_args, session_from_args
-
-CLEAR = "\033[H\033[J"
-BOLD, DIM, RESET = ("\033[1m", "\033[2m", "\033[0m") if sys.stdout.isatty() else ("", "", "")
 
 
 def fmt(v, digits=3):
@@ -47,59 +36,3 @@ def read(path):
     except (FileNotFoundError, pd.errors.EmptyDataError, KeyError, ValueError):
         return None
     return df if len(df) else None
-
-
-def delayed(df, delay):
-    """The predictions as they were `delay` seconds ago (relative to the newest one), or None if there are none that old yet."""
-    if df is None or not delay:
-        return df
-    df = df[df["ts"] <= df["ts"].max() - pd.Timedelta(float(delay), unit="s")]
-    return df if len(df) else None
-
-
-def screen(title, df, render, delay=0.0):
-    head = f"{BOLD}{title}{RESET}   {DIM}{len(df) if df is not None else 0} predictions, " \
-           f"updated {datetime.now():%H:%M:%S}{RESET}"
-    if delay:
-        head += f"   {BOLD}DELAY {delay:g} s{RESET} {DIM}[ ] 1 s  {{ }} 10 s  0 live{RESET}"
-    body = ["", "waiting for predictions ..."] if df is None else ["", *render(df)]
-    return "\n".join([head, *body])
-
-
-def main(render, description):
-    ap = argparse.ArgumentParser(description=description)
-    add_session_args(ap)
-    ap.add_argument("--interval", type=float, default=0.5, help="seconds between checks")
-    ap.add_argument("--delay", type=float, help="show the session as it was this many seconds ago, to match a delayed broadcast "
-                                                 "(default: what you used last time; keys ] [ } { 0 change it while watching)")
-    ap.add_argument("--once", action="store_true", help="print the current state once and exit")
-    ap.add_argument("--title", help="title of the terminal window (default: 'F1 predictions · <session>')")
-    args = ap.parse_args()
-    sess = session_from_args(args)
-    delay = min(max(args.delay, 0.0), float(MAX_DELAY)) if args.delay is not None else load_delay(sess.data_dir)
-
-    if args.once or not sys.stdout.isatty():
-        print(screen(str(sess), delayed(read(sess.predictions), delay), render, delay))
-        return
-    sys.stdout.write(f"\033]0;{args.title or f'F1 predictions · {sess}'}\007")        # the terminal window's title
-    seen = None
-    try:
-        with Keys() as keys:
-            while True:
-                for key in keys.read(args.interval):
-                    new = adjust_delay(delay, key)
-                    if new != delay:
-                        delay = new
-                        save_delay(sess.data_dir, delay)
-                try:
-                    stamp = os.stat(sess.predictions)
-                    stamp = (stamp.st_mtime_ns, stamp.st_size)
-                except FileNotFoundError:
-                    stamp = None
-                if (stamp, delay) != seen:
-                    seen = (stamp, delay)
-                    text = screen(str(sess), delayed(read(sess.predictions), delay), render, delay)
-                    lines = shutil.get_terminal_size().lines
-                    print(CLEAR + "\n".join(text.splitlines()[:lines - 1]), flush=True)
-    except KeyboardInterrupt:
-        pass
