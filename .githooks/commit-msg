@@ -1,0 +1,16 @@
+#!/bin/sh
+# .git/hooks/commit-msg
+MSG_FILE="$1"
+
+# Drop Claude attribution lines (case-insensitive)
+grep -viE \
+  -e '^co-authored-by:.*@anthropic\.com' \
+  -e '^claude-session:' \
+  -e 'generated with \[?claude code' \
+  "$MSG_FILE" > "$MSG_FILE.tmp"
+
+# Remove trailing blank lines left behind
+awk 'NF {p=1; for (i=0;i<n;i++) print ""; n=0; print; next} p {n++}' \
+  "$MSG_FILE.tmp" > "$MSG_FILE"
+
+rm -f "$MSG_FILE.tmp"
