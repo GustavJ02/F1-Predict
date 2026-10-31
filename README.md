@@ -61,6 +61,8 @@ fantasy/             F1 Fantasy: expected points per driver and constructor for 
   scenarios.py       Monte Carlo of a weekend scored in fantasy points: simulated qualifying, race (calibrated like pre.race), overtakes,
                      pit stops, fastest lap, Driver of the Day
   backtest.py        expected driver points against what drivers really scored on finished races
+  optimize.py        the best team (integer program over the scenarios): fresh = a new team under the cap or Limitless, transfers = the
+                     best plan for 0..7 swaps with the -10 per extra swap built in, and a verdict; --risk trades the mean for the bad weekends
 play/                strategy playground: try tyre strategies and tweaks, and compute the best strategy with pit windows
   strategy.py        a strategy as text (M-18-H-40-S) and its rules
   scenario.py        a race to experiment on (pre-race from the grid, or live from the current state) and paired comparisons
