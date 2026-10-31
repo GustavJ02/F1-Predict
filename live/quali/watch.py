@@ -13,12 +13,14 @@ Header: session part (Q1/Q2/Q3), time left, track status, sector yellows from ra
 Classification: the timing screen order with the best time of each part, the gap to P1 of the current part, the tyre, what the car is
 doing (PUSH on a flying lap, OUT on an out lap, SLOW cool-down / in-lap / crawling, PIT, STOP stopped on track) and the last lap, with a
 line at the cutoff; cars knocked out are dimmed. The map shows the same modes (see live.practice.watch); reverse video is a push lap.
-Predictions: in Q1/Q2 where the cutoff is now and where it is expected to end up (90 % range), in Q3 the pole chances.
+Predictions: in Q1/Q2 where the cutoff is now and where it is expected to end up (90 % range), with a chart of how that projection has
+moved during the part (dots, 90 % band, cutoff now; see live.quali.cutoff_chart); in Q3 the pole chances.
 
 Delay: --delay SECONDS shows the session as it was that long ago, to match a delayed broadcast; the keys ] [ } { 0 change it while you
 watch (see live.race.watch). It is remembered and shared with the other dashboards.
 """
 import pandas as pd
+from rich.console import Group
 from rich.layout import Layout
 from rich.panel import Panel
 from rich.table import Table
@@ -27,15 +29,19 @@ from rich.text import Text
 from f1live.watch import bar, fmt
 from live.practice.watch import MODE_STYLE, WIDE, circuit_panel, header, last_lap_text, messages_panel
 from live.quali.classification import classification
+from live.quali.cutoff_chart import MAX_ROWS, MIN_ROWS, cutoff_chart
 from live.race.battles import latest
 from live.race.hazards import chequered
 from live.race.watch import TEAM_COLOUR, TYRE, alert_line, lap_time, main
 
-HISTORY = 5             # predictions shown as the recent trend
+HISTORY = 5             # predictions listed as the recent trend when there is no room for the chart
+MAP_MIN_ROWS = 12       # rows kept for the circuit map when the chart takes its share of the right column
+SHEET_MIN_ROWS = 14     # ... and for the classification when the panels are stacked (narrow terminals)
 
 
-def prediction_lines(df):
-    """Lines for the predictions panel from predictions.csv rows of live.quali.model, or a note if there are none."""
+def prediction_lines(df, history=HISTORY):
+    """Lines for the predictions panel from predictions.csv rows of live.quali.model, or a note if there are none.
+    history: how many of the latest projections to list under the cutoff line (0: none, the chart shows the trend)."""
     if df is None or df.empty:
         return [Text("no predictions yet (MODEL=live.quali.model ./run_session.sh ...)", style="dim")]
     if "part" not in df:                  # another model wrote this file (the default live.race.model writes status rows only)
@@ -52,9 +58,9 @@ def prediction_lines(df):
             if pd.notna(last.get(f"pole{i}")):
                 lines.append(Text(f"  {last[f'pole{i}']:<4} {bar(last[f'p{i}'], 24)} {last[f'p{i}']:6.1%}"))
         return lines
-    lines = [Text.assemble((f"Q{part} cutoff", "bold"), f"   now {fmt(last['current'])} s   predicted {fmt(last['pred'])} s   "
-                           f"(90%: {fmt(last['lo'])} - {fmt(last['hi'])})   still to run: {fmt(last['n_pending'])}")]
-    recent = df[df["part"] == part].tail(HISTORY)
+    lines = [Text.assemble((f"Q{part} cutoff", "bold"), f"   now {fmt(last['current'])} s   predicted {fmt(last['pred'])} s"),
+             Text(f"  90%: {fmt(last['lo'])} - {fmt(last['hi'])}   still to run: {fmt(last['n_pending'])}")]   # two lines: one would wrap
+    recent = df[df["part"] == part].tail(history)
     for _, r in recent.iterrows():
         lines.append(Text(f"  {r['ts']:%H:%M:%S}  now {fmt(r['current'])}  pred {fmt(r['pred'])}  ({fmt(r['lo'])} - {fmt(r['hi'])})", style="dim"))
     return lines
@@ -105,9 +111,18 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
     layout["head"].update(header(history, sess, delay, part=f"Q{current}" if current else None, over=chequered(this_part)))
     layout["alert"].update(alert_line(history, stopped, flash))
     sheet = Panel(classification_table(history, modes), title="Classification", title_align="left")
-    pred = Panel(Text("\n").join(prediction_lines(preds)), title="Predictions", title_align="left")
-    pred_size = (len(prediction_lines(preds)) + 2)
-    if width >= WIDE:
+    wide = width >= WIDE
+    others = MAP_MIN_ROWS if wide else MAP_MIN_ROWS + SHEET_MIN_ROWS                 # rows the other panels of the body keep
+    head = prediction_lines(preds, history=0)
+    rows = min(MAX_ROWS, height - 8 - others - len(head) - 4)                      # 8: header, alert line, footer; 4: panel border, axis, legend
+    chart = cutoff_chart(preds, rows, width * 9 // 20 if wide else width) if rows >= MIN_ROWS else None
+    if chart is None:
+        lines = prediction_lines(preds)
+        pred, pred_size = Panel(Text("\n").join(lines), title="Predictions", title_align="left"), len(lines) + 2
+    else:
+        pred = Panel(Group(Text("\n").join(head), chart), title="Predictions", title_align="left")
+        pred_size = len(head) + rows + 2 + 2
+    if wide:
         layout["body"].split_row(Layout(sheet, ratio=11), Layout(name="right", ratio=9))
         layout["right"].split_column(Layout(pred, size=pred_size), Layout(map_panel))
     else:

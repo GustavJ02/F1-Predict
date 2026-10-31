@@ -24,17 +24,12 @@ from matplotlib.ticker import FuncFormatter
 from f1live.events import load
 from f1live.paths import add_session_args, session_from_args
 from live.quali.classification import part_bests, part_sizes
+from live.quali.cutoff_chart import lap_label
 
 BAND = "#4c78a8"
 PRED = "#1f3b73"
 NOW = "#e45756"
 FINAL = "#2ca02c"
-
-
-def lap_label(seconds, _pos=None):
-    """78.493 -> '1:18.493'."""
-    m, s = divmod(float(seconds), 60)
-    return f"{int(m)}:{s:06.3f}"
 
 
 def read_predictions(path):
