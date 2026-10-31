@@ -67,6 +67,9 @@ def test_prediction_lines():
     text = "\n".join(str(l) for l in watch.prediction_lines(pole))
     assert "Pole probability" in text and "VER" in text and "50.0%" in text
     assert "no predictions" in str(watch.prediction_lines(None)[0])
+    race_model = pd.DataFrame([dict(ts=ts[0], kind="status", note="collecting pace data", race_lap=None, total_laps=None)])
+    assert "live.quali.model" in str(watch.prediction_lines(race_model)[0])           # the wrong model's file: a hint, not a crash
+    assert "no predictions" in str(watch.prediction_lines(pd.DataFrame(dict(ts=ts, part=[None, None], current=1.0)))[0])
 
 
 def test_full_frame_with_and_without_telemetry():

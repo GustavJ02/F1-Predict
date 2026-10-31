@@ -38,6 +38,12 @@ def prediction_lines(df):
     """Lines for the predictions panel from predictions.csv rows of live.quali.model, or a note if there are none."""
     if df is None or df.empty:
         return [Text("no predictions yet (MODEL=live.quali.model ./run_session.sh ...)", style="dim")]
+    if "part" not in df:                  # another model wrote this file (the default live.race.model writes status rows only)
+        return [Text("predictions.csv is not from live.quali.model: restart the session with MODEL=live.quali.model ./run_session.sh ...",
+                     style="yellow")]
+    df = df[df["part"].notna()]
+    if df.empty:
+        return [Text("no predictions yet", style="dim")]
     last = df.iloc[-1]
     part = int(last["part"])
     if part == 3 and "pole1" in df and pd.notna(last.get("pole1")):
