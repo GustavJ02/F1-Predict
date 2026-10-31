@@ -108,3 +108,12 @@ def test_scripts_that_read_every_race_skip_a_race_being_recorded(tmp_path):
     assert not has_events(live)                          # header only
     live.write_text("ts,event\n2026-10-25T20:00:00Z,lap\n")
     assert has_events(live)
+
+
+def test_laps_without_driver_codes_are_ignored():
+    """A recording with no DriverList (2021 Bahrain FP1) has no tla: its laps must not end up keyed on NaN."""
+    from pre.history import valid_laps_from
+    ev = pd.DataFrame([dict(ts="2026-01-01T10:00:00Z", event="lap", driver="1", tla=tla, team="Red", lap_number=2, lap_time_s=90.0,
+                            lap_kind="push", session_part=1, compound="SOFT", tyre_new=True, tyre_laps=1, track_temp=30, air_temp=20)
+                       for tla in ("AAA", None)])
+    assert list(valid_laps_from(ev)["tla"]) == ["AAA"]

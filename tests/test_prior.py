@@ -62,7 +62,7 @@ def test_tables_from_laps_gap_is_relative_to_the_parts_fastest():
 
 
 AUSTIN = Session("2026", "Austin", "quali")
-EXPECTED_WITH_PRIOR = 94.9932      # the same moment without the prior gives 95.0466 (test_regression)
+EXPECTED_WITH_PRIOR = 94.9707      # with the 2018-2024 seasons in data/ (94.9932 on 2025-26 only); without the prior: 95.0466 (test_regression)
 
 
 @pytest.mark.skipif(not AUSTIN.events.exists(), reason=f"{AUSTIN.events} not found")

@@ -53,6 +53,7 @@ def valid_laps_from(ev):
     deleted = ev[ev["event"] == "lap_deleted"][["driver", "lap_time_s"]].assign(deleted=True)
     laps = laps.merge(deleted, on=["driver", "lap_time_s"], how="left")
     laps = laps[laps["deleted"].isna()].drop(columns="deleted")
+    laps = laps[laps["tla"].notna()]            # a recording without a DriverList (2021 Bahrain FP1) has no driver codes to key on
     keep = ["ts", "session_part", "driver", "tla", "team", "lap_number", "lap_time_s", "lap_kind", "compound",
             "tyre_new", "tyre_laps", "track_temp", "air_temp"]
     return laps[keep].reset_index(drop=True)
