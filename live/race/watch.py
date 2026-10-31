@@ -33,6 +33,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from f1live.delay import MAX_DELAY, Keys, adjust_delay, delay_file, load_delay, save_delay      # noqa: F401 (re-exported)
 from f1live.events import prepare
 from f1live.paths import add_session_args, session_from_args
 from f1live.tail import CsvTail
@@ -373,10 +374,11 @@ class Feed:
     """Follows the session's files and keeps what the dashboard needs: events, the track reference and each car's
     latest position."""
     TEL_STALE = 15          # s of event time after which telemetry no longer counts as live
-    TRAIL_S = 300           # how far back positions are kept: the longest delay the viewer can show
+    TRAIL_S = MAX_DELAY     # how far back positions are kept: the longest delay the viewer can show
 
-    def __init__(self, sess):
+    def __init__(self, sess, race=True):
         self.sess = sess
+        self.race = race                  # False for practice: hazards don't wait for a running race
         self.events = CsvTail(sess.events, prepare)
         self.tel = CsvTail(sess.telemetry, prepare_telemetry)
         self.history = None
@@ -452,7 +454,7 @@ class Feed:
             progress_of = lambda x, y: float(nearest_progress(ref, [x], [y])[0])
         lat = latest(history)
         out = lat.index[lat["out"]] if len(lat) else ()
-        return hazards(self.trail, history, at, progress_of, self.profile, self.ran, out)
+        return hazards(self.trail, history, at, progress_of, self.profile, self.ran, out, self.race)
 
     def sectors(self, history=None):
         """[end of S1, end of S2] as lap fractions from the sector times so far, or None."""
@@ -598,70 +600,15 @@ def safe_frame(build, last_good, log_path):
         return (Group(banner, last_good) if last_good is not None else banner), last_good
 
 
-STEPS = {"]": 1.0, "[": -1.0, "}": 10.0, "{": -10.0}
-
-
-def adjust_delay(delay, key, maximum=Feed.TRAIL_S):
-    """New delay in seconds after a key press: ] [ change it by 1 s, } { by 10 s, 0 goes back to live. Between 0 and `maximum`."""
-    if key == "0":
-        return 0.0
-    return min(max(delay + STEPS.get(key, 0.0), 0.0), float(maximum))
-
-
 def window_title(sess, custom=None):
     """The terminal window's title: what you asked for with --title, else the session."""
     return custom or f"F1 race dashboard · {sess}"
 
 
-def delay_file(data_dir):
-    return Path(data_dir) / ".watch_delay"
-
-
-def load_delay(data_dir):
-    """The delay used last time (broadcast delay rarely changes), 0 if none was saved."""
-    try:
-        return min(max(float(delay_file(data_dir).read_text().strip()), 0.0), float(Feed.TRAIL_S))
-    except (OSError, ValueError):
-        return 0.0
-
-
-def save_delay(data_dir, delay):
-    try:
-        delay_file(data_dir).write_text(f"{delay:g}\n")
-    except OSError:
-        pass
-
-
-class Keys:
-    """Read single key presses without waiting for Enter (a no-op unless stdin is a terminal)."""
-    def __init__(self):
-        self.fd = sys.stdin.fileno() if sys.stdin.isatty() else None
-
-    def __enter__(self):
-        if self.fd is not None:
-            import termios, tty
-            self.old = termios.tcgetattr(self.fd)
-            tty.setcbreak(self.fd)                 # Ctrl-C still works
-        return self
-
-    def __exit__(self, *exc):
-        if self.fd is not None:
-            import termios
-            termios.tcsetattr(self.fd, termios.TCSADRAIN, self.old)
-
-    def read(self, timeout):
-        """The keys pressed within `timeout` seconds (waits that long if none), as a string."""
-        if self.fd is None:
-            time.sleep(timeout)
-            return ""
-        import select
-        if select.select([sys.stdin], [], [], timeout)[0]:
-            return os.read(self.fd, 32).decode(errors="ignore")
-        return ""
-
-
-def main():
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+def main(render_fn=render, race=True, description=__doc__):
+    """Run the dashboard. render_fn(...) draws one frame with the arguments of render(); a practice dashboard (race=False) is also
+    given ref=, the track reference lap (x, y points) or None."""
+    ap = argparse.ArgumentParser(description=description, formatter_class=argparse.RawDescriptionHelpFormatter)
     add_session_args(ap)
     ap.add_argument("--interval", type=float, default=0.5, help="seconds between file checks")
     ap.add_argument("--delay", type=float, help="show the race as it was this many seconds ago, to match a delayed broadcast "
@@ -673,7 +620,7 @@ def main():
                          "the key s switches")
     args = ap.parse_args()
     sess = session_from_args(args)
-    feed = Feed(sess)
+    feed = Feed(sess, race)
     delay = min(max(args.delay, 0.0), float(Feed.TRAIL_S)) if args.delay is not None else load_delay(sess.data_dir)
 
     view = args.view
@@ -685,8 +632,9 @@ def main():
         if v["history"] is None:
             return Text(f" {sess}: no data from {delay:g} s ago yet" if delay else f" {sess}: waiting for events.csv ...")
         alerting[0] = bool(v["flags"]) or track_state(v["history"]) in BANNERS
-        return render(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay,
-                      v["strategy"], view, v["flags"], flash())
+        extra = {} if race else dict(ref=feed.tracker.ref if feed.tracker is not None else None)
+        return render_fn(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay,
+                         v["strategy"], view, v["flags"], flash(), **extra)
 
     if args.once or not sys.stdout.isatty():
         feed.poll()

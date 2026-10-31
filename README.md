@@ -37,6 +37,7 @@ live/                predictions run DURING a session
                      predict_pole.py (Q3 pole probabilities), model.py (runner hook for both),
                      watch.py (live view), backtest_pole.py (score pole predictions on past sessions),
                      prior.py (pace prior for Q1/Q2 from earlier sessions + parts), backtest_cutoff.py (score the cutoff)
+  practice/          watch.py (FP1-FP3 dashboard), status.py (clock, flags, push/slow/out per car, long runs), trackmap.py (circuit map)
   race/              pace.py (race pace per driver), battles.py (who will be within 1 s of whom, in how many laps),
                      track.py (lap progress of each car from telemetry), priors.py + priors.json (what past races say
                      about tyres, stops, passing and safety cars), projection.py (Monte Carlo of the rest of the race),
@@ -211,6 +212,27 @@ python -m fastf1 auth f1tv --status          # check the F1TV login before the s
 Use another model with `MODEL=live.quali.my_model ./run_session.sh ...` (a module with `predict(state, history, info)`).
 
 ## Qualifying
+## Practice
+
+`./run_session.sh 2026 Mexico_City fp1` (also `fp2`, `fp3`) records and parses the session but starts no model: there is nothing
+worth predicting in practice. Watch it with the practice dashboard in a second terminal:
+
+```bash
+python -m live.practice.watch 2026 Mexico_City fp1        # --once prints one frame; --delay, ] [ } { 0 as in the race dashboard
+```
+
+The header has the time left, the track status (green / yellow / VSC / safety car / red), sector yellows from race control, the pit
+exit and the weather. The timesheet shows best lap, gap, tyre, laps, current tyre, last lap, long-run pace and what each car is doing
+(PUSH, OUT, SLOW, PIT, STOP). Next to it a circuit map (the reference lap in braille dots, coloured by sector, corners numbered) shows
+every car in its team colour: reverse video is a push lap, a dim ○ an out lap, ▼ a slow car, a blinking ✖ a car stopped on track;
+cars in the pits are not drawn. Race control messages (without the lap deletions) run along the bottom.
+
+The map needs the track reference (`data/<year>/<race>/track.csv`, written by `python -m live.race.track` or built from the first
+clean lap) and `f1live.telemetry`, which `run_session.sh` starts. PUSH and SLOW are judged from the lap time projected from the time
+since the last line crossing and the distance covered (within 2 % of the driver's best / more than 20 % off); that was checked
+against the Austin telemetry: slow laps are caught reliably, but a quick long-run lap can also read PUSH. Long-run pace (5+ clean laps in
+a stint, green flag, no in/out laps) is not fuel or engine-mode corrected: compare it only between cars on the same tyre.
+
 
 ```bash
 MODEL=live.quali.model ./run_session.sh 2026 Austin quali   # record + parse + cutoff prediction in predictions.csv
@@ -226,6 +248,7 @@ In a second terminal while `run_session.sh` runs (works the same for a replay):
 ```bash
 python -m live.quali.watch 2026 Austin quali     # cutoff in Q1/Q2, pole probabilities in Q3
 python -m live.race.watch 2026 Singapore race    # full-screen race dashboard (see below)
+python -m live.practice.watch 2026 Austin fp1    # practice dashboard: timesheet, flags and circuit map
 python -m live.quali.watch 2026 Austin replay --once   # print once and exit
 ```
 

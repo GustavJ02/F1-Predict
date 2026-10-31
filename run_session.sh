@@ -5,7 +5,7 @@
 # every SYNC_EVERY seconds and once more on exit; if the store is unreachable the session carries on and retries.
 # Usage:  ./run_session.sh 2026 Austin race            (live session, needs F1TV login for the recorder)
 #         REPLAY=2026/Austin/quali SPEED=10 ./run_session.sh 2026 Austin replay   (test with a recording)
-# Env:    MODEL=live.quali.my_model (default live.race.model)  SNAPSHOT=5  TICK=5
+# Env:    MODEL=live.quali.my_model (default live.race.model; fp1/fp2/fp3 run no model unless MODEL is set)  SNAPSHOT=5  TICK=5
 #         SYNC=0 (don't push)  SYNC_EVERY=30  F1_DATA=<local data dir, default data>  F1_REMOTE=<host:path>
 set -u
 cd "$(dirname "$0")"
@@ -16,6 +16,8 @@ DIR=$DATA/$YEAR/$RACE/$SESSION
 RAW=$DIR/raw.txt
 SNAPSHOT=${SNAPSHOT:-5}
 TICK=${TICK:-5}
+# practice has nothing to predict: no model runner for fp1/fp2/fp3 unless MODEL is set (watch it with python -m live.practice.watch)
+RUN_MODEL=1; [[ $SESSION =~ ^fp[123]$ && -z ${MODEL:-} ]] && RUN_MODEL=0
 MODEL=${MODEL:-live.race.model}
 if [[ -n "${REPLAY:-}" && ! -f "$DATA/$REPLAY/raw.txt" ]]; then
   echo "REPLAY source $DATA/$REPLAY/raw.txt does not exist" >&2; exit 1
@@ -52,7 +54,7 @@ sleep 2
 restart parser python -m f1live.parse "$YEAR" "$RACE" "$SESSION" --snapshot "$SNAPSHOT" --quiet & pids+=($!)
 sleep 1
 restart telemetry python -m f1live.telemetry "$YEAR" "$RACE" "$SESSION" & pids+=($!)
-restart runner python -m f1live.runner "$YEAR" "$RACE" "$SESSION" --model "$MODEL" --tick "$TICK" & pids+=($!)
+[[ $RUN_MODEL == 1 ]] && { restart runner python -m f1live.runner "$YEAR" "$RACE" "$SESSION" --model "$MODEL" --tick "$TICK" & pids+=($!); }
 if [[ $SYNC == 1 ]]; then
   ( while true; do sleep "${SYNC_EVERY:-30}"; push || echo "[sync] push failed, retrying in ${SYNC_EVERY:-30} s"; done ) & pids+=($!)
 fi

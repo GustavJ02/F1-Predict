@@ -151,11 +151,12 @@ def retired(history):
     return set(history.loc[history["event"] == "retired", "driver"].astype(str))
 
 
-def hazards(trail, history, at, progress_of=None, profile=None, ran=None, out=()):
+def hazards(trail, history, at, progress_of=None, profile=None, ran=None, out=(), race=True):
     """{driver: 'stopped' | 'slow'} as of event time `at`. trail: {driver: [(ts, x, y, speed), ...]}; ran: {driver: [ts, ...]}
     sorted moments the car was seen racing (Feed keeps these for the whole session). A car that has retired or is `out` (marked OUT
-    in the standings) is no longer a hazard to flag: whatever happened, it is over for the race."""
-    if not race_is_live(history):
+    in the standings) is no longer a hazard to flag: whatever happened, it is over for the race. race=False (practice) skips the
+    check that a race is running; the lap counter doesn't exist there."""
+    if race and not race_is_live(history):
         return {}
     windows, gone = pit_windows(history), retired(history) | set(map(str, out))
     green = track_state(history) not in NEUTRAL
