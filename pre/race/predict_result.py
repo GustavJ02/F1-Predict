@@ -92,6 +92,24 @@ def fit_pace_model(rows, ridge=1.0):
     return out
 
 
+def fill_team_ratings(rt, q):
+    """Drivers of `q` with no rating (a reserve in the seat, a debutant) get the average rating of their team's rated drivers instead
+    of falling back to the qualifying-only model, which has almost no spread and so rates them as an average driver wherever their car
+    is. -> (ratings with the extra rows, list of the filled drivers)."""
+    if not len(rt):
+        return rt, []
+    team_rating = rt.groupby("team")["rating"].mean()
+    rt, filled = rt.copy(), []
+    for tla in q.index:
+        if tla in rt.index and pd.notna(rt.loc[tla, "rating"]):
+            continue
+        rating = team_rating.get(q.loc[tla, "team"])
+        if rating is not None and pd.notna(rating):
+            rt.loc[tla, ["team", "rating", "weight"]] = [q.loc[tla, "team"], rating, 0.0]
+            filled.append(tla)
+    return rt, filled
+
+
 def predict_pace(model, rt, q):
     """-> (Series tla -> expected pace vs the field in s/lap, sd). Uses the rating where the driver has one."""
     rel = pd.Series(index=q.index, dtype=float)
@@ -168,7 +186,7 @@ def simulate_from_grid(grid, rel, sd, priors, circuit, total, tlap, sims=SIMS, s
     return simulate(cars, (tlap, 0, total), "AllClear", priors, circuit, sims, seed, **{**defaults, **opt})
 
 
-def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, before=None, use_rating=True, q=None):
+def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, before=None, use_rating=True, q=None, fill_team=False):
     """Everything the race simulation needs for a weekend, or (None, reason): a dict with order (grid, driver codes),
     rel / sd (pace and its uncertainty per driver), total laps, typical lap time, circuit, and the pace model fit."""
     q = quali_table(av, year, race) if q is None else q          # q: a predicted qualifying table (quali_table's columns) before quali
@@ -184,7 +202,12 @@ def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, befor
     if "q" not in model:
         return None, "not enough earlier races to fit the pace model"
     rt = ratings(archive, year, before)
+    filled = []
+    if fill_team and use_rating:
+        rt, filled = fill_team_ratings(rt, q)
     rel, sd = predict_pace(model, rt, q)
+    if len(filled) and "q" in model:
+        sd[filled] = max(model["q"][1], sd[filled].max())          # a substitute's pace is much less certain than a regular's
     order = grid or list(q.sort_values("rank").index)
     order = [d for d in order if d in rel.index]
     total, tlap = race_laps_and_pace(av, year, race, laps)

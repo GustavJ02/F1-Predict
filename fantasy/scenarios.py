@@ -22,9 +22,9 @@ Driver of the Day is a fan vote and nothing recorded says how fans vote. The mod
 is proportional to exp(weights): a win, a podium, a points finish and places gained (the usual winners of the award). It is worth
 10 points to one driver, so a wrong guess moves little; DOTD holds the weights.
 
-A driver who does not take part (withdrawn=["OCO"], --out OCO) is left out of the simulation, his team-mate's constructor scores
-only the cars that run, and he is put back at -25 points (his penalties) in every scenario, so that a team that still holds him
-scores accordingly and the optimizer swaps him out on its own.
+A driver who does not take part (withdrawn=["OCO"], --out OCO) is left out of the simulation (a reserve who drove practice for his team takes the
+seat), and he is put back at -25 points (his penalties) in every scenario, so that a team that still holds him scores accordingly and
+the optimizer swaps him out on its own. His constructor takes the -25 as well only if no substitute drives.
 
 Not modelled: sprint weekends (their scoring is in fantasy.scoring, the simulation is not), time penalties in the pits, chips.
 """
@@ -188,7 +188,7 @@ def simulate_weekend(year, race, grids=40, runs=100, seed=0, grid=None, laps=Non
     tables = Tables(av)
     drivers, team, pos, q, known, gone = quali_stage(tables, av, year, race, grids, seed, grid, tuple(withdrawn))
     n_grids, D = pos.shape
-    w, why = PR.prepare_weekend(archive, av, priors, year, race, grid=None, laps=laps, q=q)
+    w, why = PR.prepare_weekend(archive, av, priors, year, race, grid=None, laps=laps, q=q, fill_team=True)
     if w is None:
         raise SystemExit(why)
     table = PR.finishing_table(archive, av, w["before"])
@@ -257,14 +257,16 @@ def score(year, race, drivers, team, grid, finish, retired, stops, fastest, seed
 
 def add_inactive(sc, inactive):
     """Put drivers who do not take part back into the table at their fixed score: the rules give every inactive driver the penalties
-    (-5 no qualifying time, -20 not classified in the race), and their constructor, which scores both drivers' points, gets them too.
-    inactive: {driver code: constructor}."""
+    (-5 no qualifying time, -20 not classified in the race). inactive: {driver code: constructor}.
+    His constructor scores both of its drivers' points, so it takes the penalties too, unless a substitute drives: a team that still
+    has two cars in the simulation (the reserve who took the seat) does not."""
     pts = S.QUALI_NO_TIME + S.RACE_NC
     for code, team in inactive.items():
+        cars = sum(t == team for t in sc.team_of.values())
         sc.drivers.append(code)
         sc.team_of[code] = team
         sc.driver_points = np.hstack([sc.driver_points, np.full((len(sc.driver_points), 1), float(pts))])
-        if team in sc.constructors:
+        if team in sc.constructors and cars < 2:
             sc.constructor_points[:, sc.constructors.index(team)] += pts
     sc.meta["inactive"] = sorted(inactive)
     return sc

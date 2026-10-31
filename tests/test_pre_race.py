@@ -86,3 +86,14 @@ def test_the_austin_prediction_file_is_a_proper_distribution():
     cols = [c for c in d.columns if c.startswith("pos_")]
     assert len(d) == len(cols) == 22 and d[cols].sum(axis=1).to_numpy() == pytest.approx(np.ones(22), abs=1e-6)
     assert d["p_win"].sum() == pytest.approx(1.0, abs=1e-6) and d["p_podium"].sum() == pytest.approx(3.0, abs=1e-6)
+
+
+def test_a_driver_without_a_rating_gets_his_teams():
+    import pandas as pd
+    from pre.race.predict_result import fill_team_ratings
+    rt = pd.DataFrame({"team": ["Haas", "Haas", "Ferrari"], "rating": [0.4, 0.6, -1.4], "weight": [5.0, 5.0, 5.0]}, index=["BEA", "OCO", "LEC"])
+    q = pd.DataFrame({"team": ["Haas", "Haas", "Ferrari", "Newteam"]}, index=["BEA", "HIR", "LEC", "NEW"])
+    out, filled = fill_team_ratings(rt, q)
+    assert filled == ["HIR"]                                   # NEW has no rated team-mate: left to the qualifying-only model
+    assert out.loc["HIR", "rating"] == 0.5 and out.loc["BEA", "rating"] == 0.4
+    assert "HIR" not in rt.index                               # the input is not changed

@@ -71,3 +71,12 @@ def test_a_driver_who_does_not_take_part_scores_his_penalties_for_himself_and_hi
     assert out.drivers == ["A", "B", "Z"] and out.team_of["Z"] == "T2"
     assert (out.driver_points[:, 2] == -25).all()                                  # -5 no qualifying time, -20 not classified
     assert (out.constructor_points[:, 1] == 5).all() and (out.constructor_points[:, 0] == 30).all()
+
+
+def test_the_constructor_is_spared_the_penalties_when_a_substitute_drives():
+    n = 20
+    sc = SC.Scenarios(drivers=["A", "B", "C"], team_of={"A": "T1", "B": "T1", "C": "T2"}, constructors=["T1", "T2"],
+                      driver_points=np.full((n, 3), 10.0), constructor_points=np.full((n, 2), 30.0), meta={})
+    out = SC.add_inactive(sc, {"Z": "T1"})                                          # T1 already has two cars: Z's seat was taken
+    assert (out.driver_points[:, 3] == -25).all()
+    assert (out.constructor_points == 30).all()
