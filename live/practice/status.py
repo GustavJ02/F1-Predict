@@ -113,7 +113,8 @@ def clean_laps(history):
     deleted = history[history["event"] == "lap_deleted"]
     if len(deleted):
         gone = set(zip(deleted["driver"], deleted["lap_time_s"].round(3)))
-        laps = laps[[(d, round(t, 3)) not in gone for d, t in zip(laps["driver"], laps["lap_time_s"])]]
+        # a boolean array, not a list: an empty list would select zero columns instead of zero rows
+        laps = laps[np.array([(d, round(t, 3)) not in gone for d, t in zip(laps["driver"], laps["lap_time_s"])], dtype=bool)]
     laps = laps[laps["track_status"].eq("AllClear")]
     return laps[laps["lap_time_s"] <= MAX_SLOWER * laps.groupby("driver")["lap_time_s"].transform("min")]
 
