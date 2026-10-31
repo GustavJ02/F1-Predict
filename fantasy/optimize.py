@@ -217,13 +217,13 @@ def describe(plan, alpha=ALPHA):
 
 
 # ---------------------------------------------------------------------------------------------------------------------------
-def scenarios_for(year, race, cache, reuse, grid, grids, runs, seed):
+def scenarios_for(year, race, cache, reuse, grid, grids, runs, seed, out=()):
     """Scenarios from fantasy.scenarios, cached to `cache` (a pickle) so that changing only the optimizer settings is instant."""
     from fantasy import scenarios as SC
     if reuse and Path(cache).exists():
         with open(cache, "rb") as f:
             return pickle.load(f)
-    sc = SC.simulate_weekend(year, race, grids=grids, runs=runs, seed=seed, grid=grid, verbose=True)
+    sc = SC.simulate_weekend(year, race, grids=grids, runs=runs, seed=seed, grid=grid, verbose=True, withdrawn=out)
     sc.parts = {}                                              # the optimizer needs only the points
     Path(cache).parent.mkdir(parents=True, exist_ok=True)
     with open(cache, "wb") as f:
@@ -284,11 +284,14 @@ def main():
     ap.add_argument("--grids", type=int, default=40)
     ap.add_argument("--runs", type=int, default=100)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out", default="", help="comma-separated codes of drivers who do not take part: simulated without them and scored "
+                                                "-25 (their penalties) wherever they are in your team")
     ap.add_argument("--reuse", action="store_true", help="use the scenarios saved by the last run for this race")
     a = ap.parse_args()
     market = load_market(a.prices, a.team if a.mode == "transfers" else None)
-    cache = FANTASY_DIR / "cache" / f"{a.year}_{a.race}.pkl"
-    sc = scenarios_for(a.year, a.race, cache, a.reuse, a.grid.split(",") if a.grid else None, a.grids, a.runs, a.seed)
+    out = sorted(d for d in a.out.split(",") if d)
+    cache = FANTASY_DIR / "cache" / f"{a.year}_{a.race}{'_out-' + '-'.join(out) if out else ''}.pkl"
+    sc = scenarios_for(a.year, a.race, cache, a.reuse, a.grid.split(",") if a.grid else None, a.grids, a.runs, a.seed, out)
     (report_fresh if a.mode == "fresh" else report_transfers)(sc, market, a)
 
 

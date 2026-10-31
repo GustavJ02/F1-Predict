@@ -117,3 +117,12 @@ def test_risk_prefers_the_steadier_team():
     cautious = O.solve(sc, market, "fresh", budget=1000, risk=1.0)
     assert cautious.cvar() >= neutral.cvar() - 1e-6
     assert cautious.points.std() < neutral.points.std() + 1e-9 or "D1" not in cautious.drivers + [cautious.boost]
+
+
+def test_an_inactive_driver_in_the_team_is_swapped_out_on_its_own():
+    sc, market = weekend(7)
+    market.team_drivers, market.team_constructors = ["D0", "D1", "D2", "D3", "D4"], ["C0", "C1"]
+    market.bank, market.free_transfers = 5.0, 2
+    sc.driver_points[:, 2] = -25.0                                                 # D2 does not take part
+    plan = O.solve(sc, market, "transfers")
+    assert "D2" not in plan.drivers and "D2" in plan.out

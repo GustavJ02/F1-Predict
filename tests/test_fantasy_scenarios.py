@@ -61,3 +61,13 @@ def test_dotd_goes_to_one_classified_driver_per_scenario():
     assert (d.sum(axis=1) == 1).all() and not (d & retired).any()
     won = (d * (finish == 1)).sum() / n
     assert 0.2 < won < 0.7                                                         # the winner is the most likely pick
+
+
+def test_a_driver_who_does_not_take_part_scores_his_penalties_for_himself_and_his_constructor():
+    n = 50
+    sc = SC.Scenarios(drivers=["A", "B"], team_of={"A": "T1", "B": "T2"}, constructors=["T1", "T2"],
+                      driver_points=np.full((n, 2), 10.0), constructor_points=np.full((n, 2), 30.0), meta={})
+    out = SC.add_inactive(sc, {"Z": "T2"})
+    assert out.drivers == ["A", "B", "Z"] and out.team_of["Z"] == "T2"
+    assert (out.driver_points[:, 2] == -25).all()                                  # -5 no qualifying time, -20 not classified
+    assert (out.constructor_points[:, 1] == 5).all() and (out.constructor_points[:, 0] == 30).all()

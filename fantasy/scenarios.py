@@ -22,6 +22,10 @@ Driver of the Day is a fan vote and nothing recorded says how fans vote. The mod
 is proportional to exp(weights): a win, a podium, a points finish and places gained (the usual winners of the award). It is worth
 10 points to one driver, so a wrong guess moves little; DOTD holds the weights.
 
+A driver who does not take part (withdrawn=["OCO"], --out OCO) is left out of the simulation, his team-mate's constructor scores
+only the cars that run, and he is put back at -25 points (his penalties) in every scenario, so that a team that still holds him
+scores accordingly and the optimizer swaps him out on its own.
+
 Not modelled: sprint weekends (their scoring is in fantasy.scoring, the simulation is not), time penalties in the pits, chips.
 """
 import argparse
@@ -136,51 +140,53 @@ def dotd_draw(rng, finish, grid, retired):
 # ---------------------------------------------------------------------------------------------------------------------------
 # the simulation
 # ---------------------------------------------------------------------------------------------------------------------------
-def race_field(target):
+def race_field(target, withdrawn=()):
     """The two race drivers of every team among the weekend's practice drivers (reserves who drive a Friday session have no
-    race form): drivers with form first, then the quickest in practice."""
-    t = target.assign(no_form=target["form_driver"].isna())
+    race form): drivers with form first, then the quickest in practice. A withdrawn driver is out, his team's next driver in
+    practice takes his place (a reserve who drove practice, if there is one)."""
+    t = target.drop(index=[d for d in withdrawn if d in target.index]).assign(no_form=lambda x: x["form_driver"].isna())
     keep = t.sort_values(["no_form", "fp_gap"]).groupby("team").head(2)
     return sorted(keep.index)
 
 
-def quali_stage(tables, av, year, race, grids, seed, grid=None):
-    """-> (drivers, team Series, positions (grids, drivers), q table for the pace model, was the grid known)."""
+def quali_stage(tables, av, year, race, grids, seed, grid=None, withdrawn=()):
+    """-> (drivers, team Series, positions (grids, drivers), q table for the pace model, was the grid known, {withdrawn driver: team})."""
     actual = PR.quali_table(av, year, race)
     if grid is not None or actual is not None:
         q = actual
         if grid is not None:
-            order = list(grid)
+            order = [d for d in grid if d not in withdrawn]
             drivers = sorted(order)
             team = q["team"] if q is not None else None
             if q is None:
                 raise SystemExit("--grid needs the qualifying session of the weekend (or use the predicted grid)")
             pos = np.array([[order.index(d) + 1 for d in drivers]])
         else:
-            drivers = sorted(q.index)
-            pos = q.loc[drivers, "rank"].to_numpy()[None, :]
-        return drivers, q.loc[drivers, "team"], pos.astype(int), q, True
+            drivers = [d for d in sorted(q.index) if d not in withdrawn]
+            pos = q.loc[drivers, "rank"].rank(method="first").to_numpy()[None, :]       # re-ranked without the withdrawn drivers
+        gone = {d: q.loc[d, "team"] for d in withdrawn if d in q.index}
+        return drivers, q.loc[drivers, "team"], pos.astype(int), q, True, gone
     fit, res, target = QG.predict_weekend(tables, year, race)
     if fit is None:
         raise SystemExit("not enough earlier weekends to predict the qualifying")
     pred = QG.predict(fit, target)
-    drivers = race_field(target)
+    drivers = race_field(target, withdrawn)
     pred = pred.loc[drivers]
     draws = QG.draw_gaps(pred, target.loc[drivers, "team"], fit, grids, seed)
     pos = draws.argsort(axis=1).argsort(axis=1) + 1
     q = pd.DataFrame(dict(team=target.loc[drivers, "team"], gap_pct=pred - pred.min()))
     q["qrel"] = q["gap_pct"] - q["gap_pct"].median()
     q["rank"] = q["gap_pct"].rank(method="first").astype(int)
-    return drivers, q["team"], pos, q, False
+    return drivers, q["team"], pos, q, False, {d: target.loc[d, "team"] for d in withdrawn if d in target.index}
 
 
-def simulate_weekend(year, race, grids=40, runs=100, seed=0, grid=None, laps=None, data_dir=DATA, verbose=False):
-    """Scenarios for the race weekend. See the module docstring."""
+def simulate_weekend(year, race, grids=40, runs=100, seed=0, grid=None, laps=None, data_dir=DATA, verbose=False, withdrawn=()):
+    """Scenarios for the race weekend. See the module docstring. withdrawn: driver codes who do not take part."""
     av = available(data_dir)
     priors = P.load_priors()
     archive = RaceArchive(av[av["session"] == "race"].reset_index(drop=True), priors)
     tables = Tables(av)
-    drivers, team, pos, q, known = quali_stage(tables, av, year, race, grids, seed, grid)
+    drivers, team, pos, q, known, gone = quali_stage(tables, av, year, race, grids, seed, grid, tuple(withdrawn))
     n_grids, D = pos.shape
     w, why = PR.prepare_weekend(archive, av, priors, year, race, grid=None, laps=laps, q=q)
     if w is None:
@@ -211,8 +217,9 @@ def simulate_weekend(year, race, grids=40, runs=100, seed=0, grid=None, laps=Non
         grid_pos[sl] = pos[k][None, :]
         if verbose:
             print(f"  grid {k + 1}/{n_grids}", end="\r")
-    return score(year, race, drivers, team, grid_pos, finish, retired, stops, fastest, seed,
-                 meta=dict(grid_known=known, grids=n_grids, runs=runs, laps=w["total"], circuit=race_key(race)), av=av)
+    sc = score(year, race, drivers, team, grid_pos, finish, retired, stops, fastest, seed,
+               meta=dict(grid_known=known, grids=n_grids, runs=runs, laps=w["total"], circuit=race_key(race)), av=av)
+    return add_inactive(sc, gone)
 
 
 def score(year, race, drivers, team, grid, finish, retired, stops, fastest, seed, meta, av):
@@ -248,6 +255,21 @@ def score(year, race, drivers, team, grid, finish, retired, stops, fastest, seed
                                 pit=pit_pts, stops=stops))
 
 
+def add_inactive(sc, inactive):
+    """Put drivers who do not take part back into the table at their fixed score: the rules give every inactive driver the penalties
+    (-5 no qualifying time, -20 not classified in the race), and their constructor, which scores both drivers' points, gets them too.
+    inactive: {driver code: constructor}."""
+    pts = S.QUALI_NO_TIME + S.RACE_NC
+    for code, team in inactive.items():
+        sc.drivers.append(code)
+        sc.team_of[code] = team
+        sc.driver_points = np.hstack([sc.driver_points, np.full((len(sc.driver_points), 1), float(pts))])
+        if team in sc.constructors:
+            sc.constructor_points[:, sc.constructors.index(team)] += pts
+    sc.meta["inactive"] = sorted(inactive)
+    return sc
+
+
 def main():
     warnings.filterwarnings("ignore")
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -258,9 +280,11 @@ def main():
     ap.add_argument("--laps", type=int)
     ap.add_argument("--grid", help="comma-separated driver codes in starting order")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--out", default="", help="comma-separated codes of drivers who do not take part")
     ap.add_argument("--data-dir", default=DATA, type=type(DATA))
     a = ap.parse_args()
-    sc = simulate_weekend(a.year, a.race, a.grids, a.runs, a.seed, a.grid.split(",") if a.grid else None, a.laps, a.data_dir, verbose=True)
+    sc = simulate_weekend(a.year, a.race, a.grids, a.runs, a.seed, a.grid.split(",") if a.grid else None, a.laps, a.data_dir, verbose=True,
+                           withdrawn=[d for d in a.out.split(",") if d])
     m = sc.meta
     print(f"\n{a.year} {a.race}: {sc.driver_points.shape[0]} scenarios ({'known grid' if m['grid_known'] else str(m['grids']) + ' simulated grids'}"
           f" x {m['runs']} runs), {m['laps']} laps\n")
