@@ -25,3 +25,14 @@ def test_quali_cutoff_view():
 
 def test_waiting_screen():
     assert "waiting for predictions" in screen("s", None, live.quali.watch.render)
+
+
+def test_delayed_view_shows_the_predictions_as_they_were():
+    from f1live.watch import delayed
+    df = quali_rows()                                  # two rows, 5 s apart
+    assert delayed(df, 0) is df
+    assert list(delayed(df, 5)["n_pending"]) == [6]
+    assert delayed(df, 60) is None                     # nothing that old yet
+    assert delayed(None, 5) is None
+    text = screen("s", delayed(df, 5), live.quali.watch.render, 5)
+    assert "DELAY 5 s" in text and "50.0%" not in text

@@ -251,6 +251,7 @@ python -m pre.race.backtest                                          # score it 
 ```
 
 It prints, per driver, the grid slot, the mean finishing position, the P10-P90 range, the chances of a win / podium / top 10,
+python -m live.quali.watch 2026 Austin quali --delay 30  # as it was 30 s ago (keys ] [ } { 0 adjust it live)
 and a small bar chart of the whole distribution over positions 1..22; the full table (`pos_1 ... pos_22`) goes to
 `data/<year>/<race>/pre_race.csv`.
 

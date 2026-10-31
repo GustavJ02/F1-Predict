@@ -3,6 +3,10 @@
 Usage (from the repo root, in a second terminal next to ./run_session.sh):
     python -m live.quali.watch 2026 Austin quali
     python -m live.quali.watch 2026 Austin replay --once      # print once and exit
+    python -m live.quali.watch 2026 Austin quali --delay 30   # as it was 30 s ago, to match a delayed TV picture
+
+Delay: --delay SECONDS, and the keys ] [ (1 s) and } { (10 s) change it while you watch; 0 goes back to live. It is remembered for
+next time and shared with live.race.watch and live.practice.watch. The recording and the model are not delayed, only what is shown.
 """
 import pandas as pd
 from f1live.watch import BOLD, RESET, bar, fmt, main, table
