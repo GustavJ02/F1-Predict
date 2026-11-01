@@ -24,18 +24,17 @@ def lap_label(seconds, _pos=None):
 
 
 def part_rows(preds):
-    """The projections of the part that is running (the last one with projections), time-ordered: (part, DataFrame) or (None, None).
-    Q3 has pole probabilities instead of a cutoff, and rows without a projection are left out."""
-    if preds is None or preds.empty or "part" not in preds or "pred" not in preds:
+    """The projections of the part that is running (the part of the latest row), time-ordered: (part, DataFrame) or (None, None).
+    Q3 has pole probabilities instead of a cutoff, so there is no chart then, not even of Q2: a Q3 row has no projection, and the
+    running part is read from the latest row before rows without a projection are dropped."""
+    if preds is None or preds.empty or not {"part", "pred", "lo", "hi", "ts"} <= set(preds.columns):
         return None, None
-    d = preds[preds["part"].notna() & preds["pred"].notna()]
-    if d.empty:
+    parts = preds["part"].dropna()
+    if parts.empty or int(parts.iloc[-1]) not in (1, 2):
         return None, None
-    part = int(d["part"].iloc[-1])
-    d = d[d["part"] == part]
-    if part not in (1, 2) or not {"lo", "hi", "ts"} <= set(d.columns):
-        return None, None
-    return part, d.sort_values("ts")
+    part = int(parts.iloc[-1])
+    d = preds[(preds["part"] == part) & preds["pred"].notna()]
+    return (part, d.sort_values("ts")) if len(d) else (None, None)
 
 
 class CutoffChart:

@@ -34,6 +34,10 @@ def test_part_rows_picks_the_running_part_and_skips_q3_and_other_files():
     assert part == 2 and (d["part"] == 2).all() and d["ts"].is_monotonic_increasing
     q3 = pd.DataFrame(dict(ts=[T0], part=[3], current=[90.0], n_pending=[3], pole1=["VER"], p1=[0.5]))      # pole probabilities, no cutoff
     assert C.part_rows(q3) == (None, None)
+    q2_then_q3 = pd.concat([predictions((1, 2)), pd.DataFrame(dict(ts=[T0 + pd.Timedelta(5000, unit="s")], part=[3], pred=[np.nan],
+                                                                    lo=[np.nan], hi=[np.nan], pole1=["VER"], p1=[0.5]))], ignore_index=True)
+    assert C.part_rows(q2_then_q3) == (None, None)             # in Q3 the chart of Q2 must not linger
+    assert C.cutoff_chart(q2_then_q3, 10) is None
 
 
 def test_the_chart_is_none_without_room_or_projections():

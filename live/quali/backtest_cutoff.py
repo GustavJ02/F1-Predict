@@ -52,7 +52,7 @@ def backtest_session(name, rows, predict_fn=predict, step=30, parts=(1, 2)):
             if res is None or np.isnan(res['pred']):
                 continue
             out.append(dict(session=name, part=part, ts=t, truth=truth, clock=res['clock'], n_pending=res['n_pending'],
-                            pred=res['pred'], lo=res['lo'], hi=res['hi'], current=res['current'],
+                            pred=res['pred'], lo=res['lo'], hi=res['hi'], lo_raw=res['lo_raw'], hi_raw=res['hi_raw'], current=res['current'],
                             err=res['pred'] - truth, abs_err=abs(res['pred'] - truth),
                             naive_abs_err=abs(res['current'] - truth),
                             covered=res['lo'] <= truth <= res['hi'], width=res['hi'] - res['lo']))

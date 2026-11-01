@@ -41,7 +41,23 @@ def simulate_cutoff(best, pending, p_run, mu, sigma, n_advance, n_sims=10_000, s
     return np.nanmedian(cutoff), np.nanpercentile(cutoff, [5, 95])    # a run where too few drivers set a time is skipped
 
 
-def predict(all_rows, part, as_of=None, verbose=True, prior=None):
+# Calibration of the 90 % band: the simulated interval is too narrow (the real cutoff fell inside it 46 % of the time at the start of a part
+# and about 65 % during it, in the backtest of 2026), so each side is scaled away from the prediction by a factor that depends on the
+# time left in the part. Rows are (seconds left, factor for the lower side, factor for the upper side), interpolated linearly.
+# Fitted by live.quali.calibrate_band on the backtest of the earlier seasons; None leaves the band as simulated.
+BAND_SCALE = None
+
+
+def scale_band(pred, lo, hi, clock, table=None):
+    """The simulated band widened by the calibration factors for the time left. -> (lo, hi); unchanged without a table."""
+    table = BAND_SCALE if table is None else table
+    if not table or np.isnan(pred) or np.isnan(lo) or np.isnan(hi) or np.isnan(clock):
+        return lo, hi
+    t, down, up = (np.array(c, float) for c in zip(*table))
+    return pred - np.interp(clock, t, down) * (pred - lo), pred + np.interp(clock, t, up) * (hi - pred)
+
+
+def predict(all_rows, part, as_of=None, verbose=True, prior=None, calibrate=True):
     q = session_state(all_rows, part, as_of)
     if q is None:
         return None
@@ -58,13 +74,16 @@ def predict(all_rows, part, as_of=None, verbose=True, prior=None):
         state['best'].to_numpy(dtype=float), state['pending'].to_numpy(),
         state['p_run'].to_numpy(), mu, sigma, n_advance, center=center, extra=extra)
 
+    lo_raw, hi_raw = lo, hi
+    if calibrate:
+        lo, hi = scale_band(median, lo, hi, clock_left)
     if verbose:
         print(f'as of {now}  clock {clock_left:.0f}s')
         print(f'improvement: mu={mu:.3f}s sigma={sigma:.3f}s (from {len(attempts)} pairs)')
         print(f'current cutoff (P{n_advance}): {current:.3f}s')
         print(f'predicted final cutoff: {median:.3f}s  (90% interval {lo:.3f}-{hi:.3f})')
         print(f'{state["pending"].sum()} drivers still to run: {", ".join(state.index[state["pending"]])}')
-    return dict(ts=now, clock=clock_left, current=current, pred=median, lo=lo, hi=hi,
+    return dict(ts=now, clock=clock_left, current=current, pred=median, lo=lo, hi=hi, lo_raw=lo_raw, hi_raw=hi_raw,
                 n_pending=int(state['pending'].sum()))
 
 
