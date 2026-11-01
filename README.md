@@ -104,6 +104,9 @@ Panels (a wide screen shows three columns, a narrower one stacks the last two):
   race's own first clean lap, or loaded at once from `data/<year>/<race>/track.csv`, which
   `python -m live.race.track 2026 Austin quali` writes from any session's telemetry (so it can be ready before the race;
   sync it with `--what track`). Without telemetry the positions are estimated from lap timing and the panel says so.
+  Press `m` (or start with `--map`) to swap the line for the full circuit map from the practice dashboard, a taller panel with
+  every car on it; the SC / VSC banner and the slow or stopped cars stay in the line above. The map needs telemetry and a track
+  reference, otherwise the line stays.
 
 **Layouts, corners and sectors for the whole calendar.** `python -m live.race.tracks` writes `track.csv`, `corners.csv` and
 `sectors.csv` into `data/<year>/<race>/` for every round of the season (default 2026). A circuit is built from this year's

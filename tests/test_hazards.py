@@ -190,3 +190,31 @@ def test_the_final_lap_is_not_the_finish_until_the_flag_has_fallen():
     h = pd.concat([h, flag], ignore_index=True)
     assert chequered(h) and find_battles(h)[0] == "race finished"
     assert not race_is_live(h)
+
+
+def map_frame(flags, status="AllClear", ref="circle", show_map=True, mode="telemetry", height=50):
+    a = np.linspace(0, 2 * np.pi, 200, endpoint=False)
+    ref = np.c_[1000 * np.cos(a), 600 * np.sin(a)] if ref == "circle" else None
+    console = Console(width=140, height=height, file=io.StringIO(), force_terminal=False, color_system=None)
+    console.print(watch.render(race_history(status), None, "x", height, ({"10": 0.3}, mode), 140, flags=flags, flash=True,
+                               ref=ref, show_map=show_map))
+    return console.file.getvalue()
+
+
+def test_the_circuit_map_replaces_the_lap_line_and_keeps_the_alerts():
+    out = map_frame({"10": "stopped"}, "VSCDeployed")
+    assert "Circuit" in out and "Lap position" not in out
+    assert "VIRTUAL SAFETY CAR" in out and "BOT stopped on track" in out and "✖" in out
+    assert any(0x2800 < ord(c) < 0x2900 for c in out)                      # the outline
+    assert "▼" in map_frame({"10": "slow"})
+    assert "[m] circuit map" in map_frame({}, show_map=False)
+
+
+def test_the_lap_line_stays_without_a_reference_or_telemetry():
+    assert "Lap position" in map_frame({}, ref=None) and "Lap position" in map_frame({}, mode="timing")
+    assert "Lap position" in map_frame({}, show_map=False)
+
+
+def test_the_map_is_taller_than_the_line():
+    rows = lambda out: len(out.split("Circuit")[1].splitlines()) if "Circuit" in out else 0
+    assert rows(map_frame({})) >= 16

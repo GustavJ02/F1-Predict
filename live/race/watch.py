@@ -21,7 +21,10 @@ Columns: standings | projected finishing order (win / podium / points chances fr
 race, live.race.projection) | battles; a narrower screen stacks the last two on the right.
 
 Bottom strip: one line for the lap with a dot per car at its position along the lap, so the gaps between cars can be
-seen (live.race.track). Without telemetry the positions are estimated from lap timing.
+seen (live.race.track). Without telemetry the positions are estimated from lap timing. Press `m` to swap the strip for the full
+circuit map of the practice dashboard (live.practice.trackmap), taller, with every car on it; the safety car / VSC banner and
+the cars that are slow or stopped stay in the line above it. The map needs the car telemetry and a track reference; without
+them the strip stays. --map starts with the map.
 """
 import argparse, os, sys, time
 from pathlib import Path
@@ -51,6 +54,7 @@ TRACK = {"AllClear": ("GREEN", "green"), "Yellow": ("YELLOW", "yellow"), "SCDepl
          "VSCDeployed": ("VSC", "yellow"), "VSCEnding": ("VSC ENDING", "yellow"), "Red": ("RED FLAG", "bold red")}
 SECTOR_COLOUR = ("cyan", "magenta", "yellow")
 MAX_BATTLES = 8
+MAP_ROWS = (16, 28)     # least and most rows the circuit map may take at the bottom (the standings keep the rest)
 TEAM_COLOUR = {"Red Bull Racing": "#3671C6", "Ferrari": "#E8002D", "Mercedes": "#27F4D2", "McLaren": "#FF8000",
                "Aston Martin": "#229971", "Alpine": "#FF87BC", "Williams": "#64C4FF", "Racing Bulls": "#6692FF",
                "Kick Sauber": "#52E252", "Audi": "#F50537", "Haas F1 Team": "#B6BABD", "Cadillac": "#C8AA4B"}
@@ -523,7 +527,7 @@ def prepare_telemetry(df):
 
 
 def render(history, preds, sess="", height=40, progress=None, width=140, corners=(), sectors=None, delay=0.0, strategy=None,
-           view="usual", flags=None, flash=False):
+           view="usual", flags=None, flash=False, ref=None, show_map=False):
     """One frame as a rich renderable. history: events.csv rows, preds: predictions.csv (or None),
     progress: ({driver: 0-1 lap progress}, 'telemetry' | 'timing' | None) for the track line, with its corners and
     sector boundaries (Feed.corners, Feed.sectors()). delay (seconds) is only shown in the header: the caller passes the
@@ -531,10 +535,15 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
     with the finish if every car follows its best strategy (`strategy`, from strategy.csv).
     flags ({driver: 'stopped' | 'slow'}, see delayed_view) are marked on the track line and named, with a safety car / VSC /
     red flag banner, in a line above it; `flash` is the blink phase (the caller flips it every half second).
+    show_map: draw the circuit map (ref: the track reference lap, see Feed.tracker) instead of the lap position line; it is only
+    used with car telemetry and a reference, otherwise the line is drawn.
     A wide screen gets three columns (standings | projected finish | battles); otherwise the right column is split."""
-    layout = Layout()
-    layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=TRACK_ROWS + 5))
     ok = history is not None and len(history)
+    prog, mode = progress or ({}, None)
+    big = bool(show_map and ok and ref is not None and mode == "telemetry" and prog)
+    foot = min(max(MAP_ROWS[0], height * 4 // 10), MAP_ROWS[1]) if big else TRACK_ROWS + 5
+    layout = Layout()
+    layout.split_column(Layout(name="head", size=1), Layout(name="body"), Layout(name="foot", size=foot))
     if view == "optimal":
         proj_panel = Panel(strategy_panel(strategy), title="Projected finish: everyone on his best strategy", title_align="left",
                            subtitle=Text("a scenario, not a forecast · [s] projection"), subtitle_align="left")
@@ -552,13 +561,26 @@ def render(history, preds, sess="", height=40, progress=None, width=140, corners
         layout["body"].split_row(Layout(stand_panel, name="left", ratio=3), Layout(name="right", ratio=2))
         layout["right"].split_column(Layout(proj_panel, name="proj", ratio=3), Layout(battle_panel, name="battles", ratio=2))
     layout["head"].update(header(history, preds, sess, delay) if ok else Text(f" {sess}  waiting ... (delay {delay:g} s)"))
-    prog, mode = progress or ({}, None)
-    cars = track_cars(history, prog, flags) if ok and prog else []
     note = {"telemetry": "from car telemetry", "timing": "estimated from lap timing"}.get(mode, "waiting for positions")
+    alert = alert_line(history, flags, flash) if ok else Text("")
+    if big:
+        from live.practice.trackmap import TrackMap          # (imports this module: not at the top)
+        lat = latest(history)
+        cars = [(str(lat.loc[d, "tla"]), frac, TEAM_COLOUR.get(lat.loc[d].get("team"), "white"),
+                 {"stopped": "STOPPED", "slow": "SLOW"}.get((flags or {}).get(d), "RUN"))
+                for d, frac in prog.items() if d in lat.index and not lat.loc[d, "out"]]
+        inner = Layout()
+        inner.split_column(Layout(alert, size=1), Layout(TrackMap(ref, cars, sectors, corners, flash)))
+        layout["foot"].update(Panel(inner, title=f"Circuit ({note})", title_align="left",
+                                    subtitle=Text.assemble(sector_legend(sectors), "▼ slow  ✖ stopped  [m] lap line"),
+                                    subtitle_align="right"))
+        return layout
+    cars = track_cars(history, prog, flags) if ok and prog else []
     track = TrackLine(cars, corners, sectors, flash) if cars else Text("no positions yet", style="dim")
-    layout["foot"].update(Panel(Group(alert_line(history, flags, flash) if ok else Text(""), track),
+    layout["foot"].update(Panel(Group(alert, track),
                                 title=f"Lap position ({note})", title_align="left",
-                                subtitle=Text.assemble(sector_legend(sectors), "◆ leader"), subtitle_align="right"))
+                                subtitle=Text.assemble(sector_legend(sectors), "◆ leader" + ("  [m] circuit map" if ref is not None else "")),
+                                subtitle_align="right"))
     return layout
 
 
@@ -618,12 +640,15 @@ def main(render_fn=render, race=True, description=__doc__, name="race dashboard"
     ap.add_argument("--view", choices=["usual", "optimal"], default="usual",
                     help="start with the projection (usual) or the finish with every driver on his best strategy (optimal); "
                          "the key s switches")
+    ap.add_argument("--map", action="store_true", help="start with the circuit map instead of the lap position line (race "
+                                                       "dashboard; the key m switches)")
     args = ap.parse_args()
     sess = session_from_args(args)
     feed = Feed(sess, race)
     delay = min(max(args.delay, 0.0), float(Feed.TRAIL_S)) if args.delay is not None else load_delay(sess.data_dir)
 
     view = args.view
+    show_map = [args.map]
     flash = lambda: int(time.time() * 2) % 2 == 0           # blink phase for alerts: on for half a second, off for half
     alerting = [False]                                      # did the last frame have anything blinking?
 
@@ -632,7 +657,9 @@ def main(render_fn=render, race=True, description=__doc__, name="race dashboard"
         if v["history"] is None:
             return Text(f" {sess}: no data from {delay:g} s ago yet" if delay else f" {sess}: waiting for events.csv ...")
         alerting[0] = bool(v["flags"]) or track_state(v["history"]) in BANNERS
-        extra = {} if race else dict(ref=feed.tracker.ref if feed.tracker is not None else None)
+        extra = dict(ref=feed.tracker.ref if feed.tracker is not None else None)
+        if race:
+            extra["show_map"] = show_map[0]
         return render_fn(v["history"], v["preds"], str(sess), height, v["progress"], width, feed.corners, v["sectors"], delay,
                          v["strategy"], view, v["flags"], flash(), **extra)
 
@@ -655,6 +682,10 @@ def main(render_fn=render, race=True, description=__doc__, name="race dashboard"
                     if key in "sS":
                         view = "optimal" if view == "usual" else "usual"
                         drawn_delay = None                          # redraw now
+                        continue
+                    if race and key in "mM":
+                        show_map[0] = not show_map[0]
+                        drawn_delay = None
                         continue
                     new = adjust_delay(delay, key)
                     if new != delay:
