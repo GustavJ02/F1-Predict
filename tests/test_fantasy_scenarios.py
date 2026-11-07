@@ -80,3 +80,12 @@ def test_the_constructor_is_spared_the_penalties_when_a_substitute_drives():
     out = SC.add_inactive(sc, {"Z": "T1"})                                          # T1 already has two cars: Z's seat was taken
     assert (out.driver_points[:, 3] == -25).all()
     assert (out.constructor_points == 30).all()
+
+
+def test_a_withdrawn_driver_who_drove_no_session_still_scores_his_penalties():
+    n = 20
+    sc = SC.Scenarios(drivers=["A", "B"], team_of={"A": "T1", "B": "T2"}, constructors=["T1", "T2"],
+                      driver_points=np.full((n, 2), 10.0), constructor_points=np.full((n, 2), 30.0), meta={})
+    out = SC.add_inactive(sc, {"Z": None})                                          # not in the weekend's table: team unknown
+    assert out.drivers == ["A", "B", "Z"] and (out.driver_points[:, 2] == -25).all()
+    assert (out.constructor_points == 30).all()

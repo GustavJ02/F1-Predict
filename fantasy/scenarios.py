@@ -164,7 +164,7 @@ def quali_stage(tables, av, year, race, grids, seed, grid=None, withdrawn=()):
         else:
             drivers = [d for d in sorted(q.index) if d not in withdrawn]
             pos = q.loc[drivers, "rank"].rank(method="first").to_numpy()[None, :]       # re-ranked without the withdrawn drivers
-        gone = {d: q.loc[d, "team"] for d in withdrawn if d in q.index}
+        gone = {d: q.loc[d, "team"] if d in q.index else None for d in withdrawn}
         return drivers, q.loc[drivers, "team"], pos.astype(int), q, True, gone
     fit, res, target = QG.predict_weekend(tables, year, race)
     if fit is None:
@@ -177,7 +177,7 @@ def quali_stage(tables, av, year, race, grids, seed, grid=None, withdrawn=()):
     q = pd.DataFrame(dict(team=target.loc[drivers, "team"], gap_pct=pred - pred.min()))
     q["qrel"] = q["gap_pct"] - q["gap_pct"].median()
     q["rank"] = q["gap_pct"].rank(method="first").astype(int)
-    return drivers, q["team"], pos, q, False, {d: target.loc[d, "team"] for d in withdrawn if d in target.index}
+    return drivers, q["team"], pos, q, False, {d: target.loc[d, "team"] if d in target.index else None for d in withdrawn}
 
 
 def simulate_weekend(year, race, grids=40, runs=100, seed=0, grid=None, laps=None, data_dir=DATA, verbose=False, withdrawn=()):
@@ -259,14 +259,15 @@ def add_inactive(sc, inactive):
     """Put drivers who do not take part back into the table at their fixed score: the rules give every inactive driver the penalties
     (-5 no qualifying time, -20 not classified in the race). inactive: {driver code: constructor}.
     His constructor scores both of its drivers' points, so it takes the penalties too, unless a substitute drives: a team that still
-    has two cars in the simulation (the reserve who took the seat) does not."""
+    has two cars in the simulation (the reserve who took the seat) does not. A driver who drove none of the weekend's sessions comes
+    with team None: he still scores the penalties, his constructor is left alone (a substitute drove practice in his place)."""
     pts = S.QUALI_NO_TIME + S.RACE_NC
     for code, team in inactive.items():
         cars = sum(t == team for t in sc.team_of.values())
         sc.drivers.append(code)
         sc.team_of[code] = team
         sc.driver_points = np.hstack([sc.driver_points, np.full((len(sc.driver_points), 1), float(pts))])
-        if team in sc.constructors and cars < 2:
+        if team is not None and team in sc.constructors and cars < 2:
             sc.constructor_points[:, sc.constructors.index(team)] += pts
     sc.meta["inactive"] = sorted(inactive)
     return sc
