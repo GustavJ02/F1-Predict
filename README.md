@@ -293,6 +293,7 @@ or accents is accepted too and converted. `Austin` is an alias of `United_States
 ```bash
 python -m pre.race.predict_result 2026 Austin --laps 56              # finishing distribution for every driver
 python -m pre.race.predict_result 2026 Austin --grid ANT,LEC,VER,...  # the real grid if there are penalties
+python -m pre.race.predict_result 2026 Sao_Paulo                    # before quali: averaged over 40 predicted grids (--grids)
 python -m pre.race.backtest                                          # score it on every race we have
 python -m pre.race.predict_sc 2026 Mexico_City --rain-prob 0.1       # how many safety cars: SC, VSC only, SC or VSC (rain chance, --date)
 ```

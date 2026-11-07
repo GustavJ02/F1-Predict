@@ -97,3 +97,20 @@ def test_a_driver_without_a_rating_gets_his_teams():
     assert filled == ["HIR"]                                   # NEW has no rated team-mate: left to the qualifying-only model
     assert out.loc["HIR", "rating"] == 0.5 and out.loc["BEA", "rating"] == 0.4
     assert "HIR" not in rt.index                               # the input is not changed
+
+
+def test_before_qualifying_the_race_is_averaged_over_predicted_grids(monkeypatch):
+    rel = pd.Series({d[1]: 0.1 * i for i, d in enumerate(DRIVERS[:6])})
+    drivers = list(rel.index)
+    q = pd.DataFrame(dict(team="T", gap_pct=0.0, qrel=0.0, rank=range(1, 7)), index=drivers)
+    pos = np.array([[1, 2, 3, 4, 5, 6], [6, 5, 4, 3, 2, 1]])                   # two very different grids
+    w = dict(order=drivers, rel=rel, sd=pd.Series(0.2, index=drivers), total=40, tlap=90.0, circuit="Test", model={}, n_train=0,
+             rated=0, before="2100", temp=None)
+    monkeypatch.setattr(PR, "predicted_quali", lambda *a, **k: ((q, pos), None))
+    monkeypatch.setattr(PR, "prepare_weekend", lambda *a, **k: (w, None))
+    monkeypatch.setattr(PR, "quali_table", lambda *a, **k: None)
+    out, info = PR.predict_weekend(None, None, priors(), 2026, "Test", sims=400, blend=0, predict_quali=True, grids=2)
+    cols = [f"pos_{k}" for k in range(1, 7)]
+    assert out[cols].sum(axis=1).to_numpy() == pytest.approx(np.ones(6)) and out["p_win"].sum() == pytest.approx(1.0)
+    assert (out["grid"] == 3.5).all() and info["predicted_grid"] and info["grids"] == 2 and info["runs"] == 200
+    assert list(out["proj_rank"]) == list(range(1, 7)) and out["mean_pos"].is_monotonic_increasing

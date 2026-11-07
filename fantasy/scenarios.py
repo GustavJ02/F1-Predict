@@ -140,15 +140,6 @@ def dotd_draw(rng, finish, grid, retired):
 # ---------------------------------------------------------------------------------------------------------------------------
 # the simulation
 # ---------------------------------------------------------------------------------------------------------------------------
-def race_field(target, withdrawn=()):
-    """The two race drivers of every team among the weekend's practice drivers (reserves who drive a Friday session have no
-    race form): drivers with form first, then the quickest in practice. A withdrawn driver is out, his team's next driver in
-    practice takes his place (a reserve who drove practice, if there is one)."""
-    t = target.drop(index=[d for d in withdrawn if d in target.index]).assign(no_form=lambda x: x["form_driver"].isna())
-    keep = t.sort_values(["no_form", "fp_gap"]).groupby("team").head(2)
-    return sorted(keep.index)
-
-
 def quali_stage(tables, av, year, race, grids, seed, grid=None, withdrawn=()):
     """-> (drivers, team Series, positions (grids, drivers), q table for the pace model, was the grid known, {withdrawn driver: team})."""
     actual = PR.quali_table(av, year, race)
@@ -170,7 +161,7 @@ def quali_stage(tables, av, year, race, grids, seed, grid=None, withdrawn=()):
     if fit is None:
         raise SystemExit("not enough earlier weekends to predict the qualifying")
     pred = QG.predict(fit, target)
-    drivers = race_field(target, withdrawn)
+    drivers = PR.race_field(target, withdrawn)
     pred = pred.loc[drivers]
     draws = QG.draw_gaps(pred, target.loc[drivers, "team"], fit, grids, seed)
     pos = draws.argsort(axis=1).argsort(axis=1) + 1

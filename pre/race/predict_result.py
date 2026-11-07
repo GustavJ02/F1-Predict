@@ -15,9 +15,14 @@ quarter): on the day track position is stickier than a lap-time model sees. So e
 blended 50/50 with the table of where cars starting from that slot really finished in the earlier races (smoothed), and
 rebalanced so that every position is taken by exactly one driver. The 50/50 weight was the best of the backtest.
 
+Before qualifying (no quali session recorded and no --grid) the qualifying is predicted instead (pre.quali.predict_grid, from form and
+this weekend's practice): GRIDS grids are drawn from it, the race is simulated from each, and the distributions are averaged, so the
+uncertainty of the grid is carried into the result. The GRID column then shows the expected grid slot. Not backtested.
+
 Usage (from the repo root; the race folder is the data folder, e.g. Austin or United_States):
     python -m pre.race.predict_result 2026 Austin --laps 56
     python -m pre.race.predict_result 2026 Austin --grid VER,NOR,LEC,...      # actual grid order if there are penalties
+    python -m pre.race.predict_result 2026 Sao_Paulo --grids 60                # before qualifying: average over 60 predicted grids
 """
 import argparse
 import warnings
@@ -40,6 +45,7 @@ GAP_NOISE = 1.0          # s, random spread of the starting gaps (reaction at th
 PACE_SD_SCALE = 0.5      # the regression's residual is mostly noise in the measured pace, not in the true pace
 MIN_PACE_SD = 0.10       # s
 SIMS = 1000
+GRIDS = 40               # predicted grids to average over before qualifying
 
 
 def quali_table(av, year, race):
@@ -59,6 +65,32 @@ def quali_table(av, year, race):
     for i, (tla, team) in enumerate((x for x in took_part.items() if x[0] not in t.index), 1):
         t.loc[tla] = [team, t["gap_pct"].max() + 1.0, t["qrel"].max() + 1.0, len(t) + 1]
     return t
+
+
+def race_field(target, withdrawn=()):
+    """The two race drivers of every team among the weekend's practice drivers (reserves who drive a Friday session have no
+    race form): drivers with form first, then the quickest in practice. A withdrawn driver is out, his team's next driver in
+    practice takes his place (a reserve who drove practice, if there is one)."""
+    t = target.drop(index=[d for d in withdrawn if d in target.index]).assign(no_form=lambda x: x["form_driver"].isna())
+    keep = t.sort_values(["no_form", "fp_gap"]).groupby("team").head(2)
+    return sorted(keep.index)
+
+
+def predicted_quali(av, year, race, grids=GRIDS, seed=0):
+    """Before qualifying: -> (q table with quali_table's columns from the predicted gaps, positions (grids, drivers) of grids drawn from
+    the prediction, in q's row order), or (None, reason)."""
+    from pre.quali import predict_grid as QG
+    from pre.quali.features import Tables
+    fit, _, target = QG.predict_weekend(Tables(av), year, race)
+    if fit is None:
+        return None, f"no qualifying data for {year} {race}, and not enough earlier weekends to predict it"
+    drivers = race_field(target)
+    pred = QG.predict(fit, target).loc[drivers]
+    draws = QG.draw_gaps(pred, target.loc[drivers, "team"], fit, grids, seed)
+    q = pd.DataFrame(dict(team=target.loc[drivers, "team"], gap_pct=pred - pred.min()))
+    q["qrel"] = q["gap_pct"] - q["gap_pct"].median()
+    q["rank"] = q["gap_pct"].rank(method="first").astype(int)
+    return (q, draws.argsort(axis=1).argsort(axis=1) + 1), None
 
 
 def training_rows(archive, av, before, priors_unused=None):
@@ -217,8 +249,12 @@ def prepare_weekend(archive, av, priors, year, race, grid=None, laps=None, befor
 
 
 def predict_weekend(archive, av, priors, year, race, grid=None, laps=None, sims=SIMS, seed=0, before=None, use_rating=True,
-                    blend=GRID_BLEND, track_temp="auto", **opt):
-    """-> (DataFrame per driver with pos_1..pos_N, info) or (None, reason). `before`: only use races started before this."""
+                    blend=GRID_BLEND, track_temp="auto", predict_quali=False, grids=GRIDS, **opt):
+    """-> (DataFrame per driver with pos_1..pos_N, info) or (None, reason). `before`: only use races started before this.
+    predict_quali: with no qualifying recorded and no grid, average over `grids` grids drawn from the predicted qualifying."""
+    if predict_quali and grid is None and quali_table(av, year, race) is None:
+        return predict_from_predicted_quali(archive, av, priors, year, race, laps, sims, seed, before, use_rating, blend, track_temp,
+                                            grids, **opt)
     w, why = prepare_weekend(archive, av, priors, year, race, grid, laps, before, use_rating)
     if w is None:
         return None, why
@@ -229,6 +265,41 @@ def predict_weekend(archive, av, priors, year, race, grid=None, laps=None, sims=
     out["grid"] = out["tla"].map({d: i + 1 for i, d in enumerate(w["order"])})
     out["rel_pace"] = out["tla"].map(w["rel"])
     info.update(total_laps=w["total"], pace_model=w["model"], n_train=w["n_train"], rated=w["rated"], temp=temp)
+    return out, info
+
+
+def predict_from_predicted_quali(archive, av, priors, year, race, laps, sims, seed, before, use_rating, blend, track_temp, grids, **opt):
+    """predict_weekend before qualifying: the race simulated from each of `grids` predicted grids (sims split between them), the
+    finishing distributions averaged. grid = the expected grid slot."""
+    pq, why = predicted_quali(av, year, race, grids, seed)
+    if pq is None:
+        return None, why
+    q, pos = pq
+    w, why = prepare_weekend(archive, av, priors, year, race, laps=laps, before=before, use_rating=use_rating, q=q, fill_team=True)
+    if w is None:
+        return None, why
+    drivers = list(q.index)
+    if missing := sorted(set(drivers) - set(w["order"])):
+        return None, f"no pace estimate for {missing}"
+    temp = w["temp"] if track_temp == "auto" else track_temp
+    table = finishing_table(archive, av, w["before"]) if blend else None
+    runs = max(sims // len(pos), 1)
+    n, cols = len(drivers), [f"pos_{k}" for k in range(1, len(drivers) + 1)]
+    M, p_sc, template = np.zeros((n, n)), [], None
+    for k in range(len(pos)):
+        order = sorted(drivers, key=lambda d: pos[k, drivers.index(d)])
+        out, info = simulate_from_grid(order, w["rel"], w["sd"], priors, w["circuit"], w["total"], w["tlap"], runs, seed + k, temp=temp, **opt)
+        if blend:
+            out = blend_with_grid(out, order, table, blend)
+        M += out.set_index("tla").loc[drivers, cols].to_numpy()
+        p_sc.append(info["p_sc"])
+        template = out
+    out = template.set_index("tla").loc[drivers].reset_index()
+    out = summarize(out, M / len(pos))
+    out["grid"] = out["tla"].map(dict(zip(drivers, pos.mean(axis=0))))
+    out["rel_pace"] = out["tla"].map(w["rel"])
+    info = dict(p_sc=float(np.mean(p_sc)), total_laps=w["total"], pace_model=w["model"], n_train=w["n_train"], rated=w["rated"], temp=temp,
+                predicted_grid=True, grids=len(pos), runs=runs)
     return out, info
 
 
@@ -263,9 +334,14 @@ def blend_with_grid(out, order, table, weight=GRID_BLEND):
     slot = out["tla"].map({d: i for i, d in enumerate(order)}).to_numpy()
     prior = table[np.minimum(slot, table.shape[0] - 1)][:, :n]
     prior = prior / prior.sum(axis=1, keepdims=True)
-    M = sinkhorn((1 - weight) * out[cols].to_numpy() + weight * prior)
+    return summarize(out, sinkhorn((1 - weight) * out[cols].to_numpy() + weight * prior))
+
+
+def summarize(out, M):
+    """out with its pos_1..pos_N set to M (rows = out's drivers) and the summary columns recomputed, sorted by the mean position."""
+    n = len(out)
     out = out.copy()
-    out[cols] = M
+    out[[f"pos_{k}" for k in range(1, n + 1)]] = M
     cum = np.cumsum(M, axis=1)
     out["mean_pos"] = M @ np.arange(1, n + 1)
     out["proj_pos"] = (cum < 0.5).sum(axis=1) + 1
@@ -291,11 +367,15 @@ def print_table(out, info, top=None):
     n = len([c for c in out.columns if c.startswith("pos_")])
     temp = f", track {info['temp']:.0f} C" if info.get("temp") else ""
     print(f"{info['total_laps']} laps{temp}, pace model fitted on {info['n_train']} driver-races, "
-          f"{info['rated']} drivers rated, chance of a safety car / VSC {info['p_sc'] * 100:.0f}%\n")
+          f"{info['rated']} drivers rated, chance of a safety car / VSC {info['p_sc'] * 100:.0f}%")
+    if info.get("predicted_grid"):
+        print(f"no qualifying yet: averaged over {info['grids']} grids drawn from the predicted qualifying ({info['runs']} races each); "
+              f"GRID is the expected slot")
+    print()
     print(f" {'':3}{'DRV':4}{'GRID':>5} {'MEAN':>5} {'P10-P90':>8} {'WIN':>5} {'PODIUM':>7} {'TOP10':>6}   finishing position 1 {'.' * (n - 4)} {n}")
     for i, (_, r) in enumerate(out.head(top or len(out)).iterrows(), 1):
         lo, hi = percentile_range(r, n)
-        print(f" {i:>2} {r['tla']:4}{int(r['grid']):>5} {r['mean_pos']:>5.1f} {f'{lo}-{hi}':>8} {r['p_win'] * 100:>4.0f}% "
+        print(f" {i:>2} {r['tla']:4}{r['grid']:>5.0f} {r['mean_pos']:>5.1f} {f'{lo}-{hi}':>8} {r['p_win'] * 100:>4.0f}% "
               f"{r['p_podium'] * 100:>6.0f}% {r['p_points'] * 100:>5.0f}%   {sparkline(r, n)}")
 
 
@@ -309,6 +389,8 @@ def main():
     ap.add_argument("--track-temp", type=float, help="expected race-day track temperature in C (default: this weekend's "
                                                       "qualifying and practice temperature)")
     ap.add_argument("--sims", type=int, default=SIMS)
+    ap.add_argument("--grids", type=int, default=GRIDS, help="before qualifying: predicted grids to average over (the sims are split "
+                                                              "between them)")
     ap.add_argument("--csv", type=Path, help="write the full distribution here (default: data/<year>/<race>/pre_race.csv)")
     ap.add_argument("--data-dir", default=DATA, type=Path)
     a = ap.parse_args()
@@ -316,7 +398,7 @@ def main():
     priors = P.load_priors()
     archive = RaceArchive(av[av["session"] == "race"].reset_index(drop=True), priors)
     out, info = predict_weekend(archive, av, priors, a.year, a.race, a.grid.split(",") if a.grid else None, a.laps, a.sims,
-                                track_temp=a.track_temp if a.track_temp is not None else "auto")
+                                track_temp=a.track_temp if a.track_temp is not None else "auto", predict_quali=True, grids=a.grids)
     if out is None:
         raise SystemExit(info)
     print_table(out, info)
